@@ -64,6 +64,10 @@ export class PriceEngine extends EventEmitter {
   private symbolSource: Map<string, string> = new Map();
   private sourceInfo: Map<string, SourceInfo> = new Map();
 
+  // Sprint 2.6: anti-spike state — last accepted (mid, time) per symbol
+  private lastValidMid: Map<string, { mid: number; ts: number }> = new Map();
+  private rejectedTickStats: Map<string, { count: number; lastReason: string }> = new Map();
+
   // Mock fallback
   private mockInterval: NodeJS.Timeout | null = null;
   private mockSymbols: Set<string> = new Set();
@@ -296,7 +300,58 @@ export class PriceEngine extends EventEmitter {
 
   // ─── Live tick handler ───
 
+  /**
+   * Sprint 2.6: validate a tick before accepting it.
+   * Rejects:
+   *  - non-positive bid or ask
+   *  - inverted quote (bid > ask)
+   *  - extreme time skew (timestamp >5s in future or >5min in past)
+   *  - spike: |new_mid - last_mid| / last_mid > 5% within 10s
+   * Returns null if accepted, or a reason string if rejected.
+   */
+  private validateTick(tick: PriceTick, source: string): string | null {
+    if (!tick || typeof tick.bid !== 'number' || typeof tick.ask !== 'number') return 'invalid_shape';
+    if (!isFinite(tick.bid) || !isFinite(tick.ask)) return 'non_finite';
+    if (tick.bid <= 0 || tick.ask <= 0) return 'non_positive';
+    if (tick.bid > tick.ask) return 'inverted_quote';
+
+    const now = Date.now();
+    const tickTs = tick.timestamp || now;
+    if (tickTs > now + 5_000) return 'future_timestamp';
+    if (tickTs < now - 300_000) return 'too_old';
+
+    const mid = (tick.bid + tick.ask) / 2;
+    const last = this.lastValidMid.get(tick.symbol);
+    if (last) {
+      const dt = now - last.ts;
+      // Compare within 10s window. dt >= 0 (same ms allowed).
+      if (dt >= 0 && dt < 10_000) {
+        const change = Math.abs(mid - last.mid) / last.mid;
+        // 10% absolute jump in <10s = spike, reject.
+        if (change > 0.10) return `spike_${(change * 100).toFixed(1)}pct`;
+      }
+    }
+    return null;
+  }
+
   private onLiveTick(tick: PriceTick, source: string) {
+    // Sprint 2.6: spike/gap protection
+    const rejectReason = this.validateTick(tick, source);
+    if (rejectReason) {
+      const stats = this.rejectedTickStats.get(tick.symbol) || { count: 0, lastReason: '' };
+      stats.count++;
+      stats.lastReason = rejectReason;
+      this.rejectedTickStats.set(tick.symbol, stats);
+      // Log every 10th rejection to avoid spam, plus the first
+      if (stats.count === 1 || stats.count % 10 === 0) {
+        logger.warn({ symbol: tick.symbol, source, reason: rejectReason, bid: tick.bid, ask: tick.ask, count: stats.count }, '[PriceEngine] tick rejected');
+      }
+      return;
+    }
+
+    const mid = (tick.bid + tick.ask) / 2;
+    this.lastValidMid.set(tick.symbol, { mid, ts: Date.now() });
+
     updatePrice(tick);
     this.updateCandle(tick);
     this.emit('tick', tick);

@@ -138,12 +138,40 @@ async function checkPendingOrders() {
 
 // ─── 3. Margin Call / Auto-Liquidation ───
 
+/**
+ * Compute total unrealized P&L (cents) and rank trades worst-first.
+ * Returns null if no live price is available for the trade list.
+ */
+function computeAccountState(trades: Array<any>) {
+  let totalUnrealizedPnlCents = BigInt(0);
+  const ranked: Array<{ trade: any; pnlCents: bigint; closePrice: number }> = [];
+
+  for (const trade of trades) {
+    const price = getCurrentPrice(trade.instrument.symbol);
+    if (!price || (price.bid === 0 && price.ask === 0)) continue;
+    const openPriceFloat = Number(trade.open_price) / 100000;
+    const closePrice = trade.side === 'BUY' ? price.bid : price.ask;
+    const direction = trade.side === 'BUY' ? 1 : -1;
+    const pnlRaw = (closePrice - openPriceFloat) * trade.volume * trade.instrument.lot_size * direction;
+    const pnlCents = BigInt(Math.round(pnlRaw * 100));
+    totalUnrealizedPnlCents += pnlCents;
+    ranked.push({ trade, pnlCents, closePrice });
+  }
+
+  // Sort worst-first (largest negative P&L first)
+  ranked.sort((a, b) => (a.pnlCents < b.pnlCents ? -1 : a.pnlCents > b.pnlCents ? 1 : 0));
+  return { totalUnrealizedPnlCents, ranked };
+}
+
+/**
+ * EXEC-003: Cascade liquidation. Close worst-first trades repeatedly within
+ * a single tick until margin level recovers above STOP_OUT_LEVEL or there are
+ * no positions left. Prevents the 1-trade-per-second cap that exposed clients
+ * during crashes (10 positions × 1s = 10s of further losses).
+ */
 async function checkMarginCalls() {
-  // Get all accounts with open positions
   const accounts = await prisma.account.findMany({
-    where: {
-      margin_used: { gt: 0 },
-    },
+    where: { margin_used: { gt: 0 } },
     include: {
       trades: {
         where: { status: 'OPEN' },
@@ -152,62 +180,69 @@ async function checkMarginCalls() {
     },
   });
 
+  const MAX_LIQUIDATIONS_PER_TICK = 50; // safety cap to bound a single tick
+
   for (const account of accounts) {
     if (account.trades.length === 0) continue;
 
-    // Calculate total unrealized P&L
-    let totalUnrealizedPnlCents = BigInt(0);
-    for (const trade of account.trades) {
-      const price = getCurrentPrice(trade.instrument.symbol);
-      if (!price || (price.bid === 0 && price.ask === 0)) continue;
+    let liveTrades = account.trades.slice();
+    let liveBalance = BigInt(account.balance);
+    let liveMarginUsed = BigInt(account.margin_used);
+    let iterations = 0;
 
-      const openPriceFloat = Number(trade.open_price) / 100000;
-      const closePrice = trade.side === 'BUY' ? price.bid : price.ask;
-      const direction = trade.side === 'BUY' ? 1 : -1;
-      const pnlRaw = (closePrice - openPriceFloat) * trade.volume * trade.instrument.lot_size * direction;
-      totalUnrealizedPnlCents += BigInt(Math.round(pnlRaw * 100));
-    }
+    while (iterations < MAX_LIQUIDATIONS_PER_TICK) {
+      iterations++;
+      if (liveTrades.length === 0) break;
+      if (liveMarginUsed <= BigInt(0)) break;
 
-    const equity = BigInt(account.balance) + totalUnrealizedPnlCents;
-    const marginUsed = BigInt(account.margin_used);
+      const { totalUnrealizedPnlCents, ranked } = computeAccountState(liveTrades);
+      const equity = liveBalance + totalUnrealizedPnlCents;
+      const marginLevel = Number(equity * BigInt(100)) / Number(liveMarginUsed);
 
-    if (marginUsed <= BigInt(0)) continue;
+      if (marginLevel >= STOP_OUT_LEVEL) break; // recovered
 
-    const marginLevel = Number(equity * BigInt(100)) / Number(marginUsed);
+      if (ranked.length === 0) break; // no priceable trades, abort
 
-    if (marginLevel < STOP_OUT_LEVEL) {
       logger.warn({
         accountId: account.id,
         marginLevel: marginLevel.toFixed(2),
         equity: equity.toString(),
-        marginUsed: marginUsed.toString(),
-      }, '[PositionMonitor] MARGIN CALL — liquidating positions');
+        marginUsed: liveMarginUsed.toString(),
+        iteration: iterations,
+        remainingPositions: liveTrades.length,
+      }, '[PositionMonitor] MARGIN CALL — cascade liquidation in progress');
 
-      // Close the biggest losing position first
-      let worstTrade = account.trades[0];
-      let worstPnl = Infinity;
-      for (const trade of account.trades) {
-        const price = getCurrentPrice(trade.instrument.symbol);
-        if (!price) continue;
-        const openPriceFloat = Number(trade.open_price) / 100000;
-        const closePrice = trade.side === 'BUY' ? price.bid : price.ask;
-        const direction = trade.side === 'BUY' ? 1 : -1;
-        const pnl = (closePrice - openPriceFloat) * trade.volume * trade.instrument.lot_size * direction;
-        if (pnl < worstPnl) {
-          worstPnl = pnl;
-          worstTrade = trade;
+      const worst = ranked[0];
+      const closeResult = await closeTradeAtPrice(
+        { ...worst.trade, account },
+        worst.closePrice,
+        'LIQUIDATED',
+      );
+
+      // Track post-close state in memory so the next iteration uses fresh figures
+      // without re-querying. closeTradeAtPrice returns the new account snapshot
+      // when successful; if it didn't, fall back to a manual estimate.
+      if (closeResult && typeof closeResult === 'object' && 'newBalance' in closeResult) {
+        liveBalance = (closeResult as any).newBalance as bigint;
+        liveMarginUsed = (closeResult as any).newMarginUsed as bigint;
+      } else {
+        // Best-effort estimate: pnl + balance, release the worst trade's margin
+        liveBalance = liveBalance + worst.pnlCents;
+        if (liveBalance < BigInt(0)) liveBalance = BigInt(0); // ESMA NBP
+        // We don't know exact margin release without re-querying; reset by re-fetch next loop.
+        const refreshed = await prisma.account.findUnique({ where: { id: account.id } });
+        if (refreshed) {
+          liveBalance = BigInt(refreshed.balance);
+          liveMarginUsed = BigInt(refreshed.margin_used);
         }
       }
 
-      const price = getCurrentPrice(worstTrade.instrument.symbol);
-      if (price) {
-        const closePrice = worstTrade.side === 'BUY' ? price.bid : price.ask;
-        await closeTradeAtPrice(
-          { ...worstTrade, account },
-          closePrice,
-          'LIQUIDATED',
-        );
-      }
+      // Drop the just-closed trade from the working set
+      liveTrades = liveTrades.filter(t => t.id !== worst.trade.id);
+    }
+
+    if (iterations >= MAX_LIQUIDATIONS_PER_TICK) {
+      logger.error({ accountId: account.id }, '[PositionMonitor] cascade liquidation hit safety cap');
     }
   }
 }
@@ -342,7 +377,11 @@ async function closeDealerTrade(trade: any, closePrice: number, reason: string) 
 
 // ─── Helpers ───
 
-async function closeTradeAtPrice(trade: any, closePrice: number, reason: string) {
+async function closeTradeAtPrice(
+  trade: any,
+  closePrice: number,
+  reason: string,
+): Promise<{ closed: boolean; newBalance?: bigint; newMarginUsed?: bigint }> {
   const closePriceInt = priceToInt(closePrice, 5);
   const openPriceFloat = Number(trade.open_price) / 100000;
   const direction = trade.side === 'BUY' ? 1 : -1;
@@ -351,50 +390,46 @@ async function closeTradeAtPrice(trade: any, closePrice: number, reason: string)
   const pnlCents = BigInt(Math.round(pnlRaw * 100));
 
   const status = reason === 'LIQUIDATED' ? 'LIQUIDATED' : 'CLOSED';
-
-  // Pre-fetch account if not bundled with trade (read outside tx is ok — we re-resolve inside)
   const accountId = trade.account?.id || trade.account_id;
 
-  // EXEC-001: Atomic close (SL/TP, liquidation) + balance update + transaction.
-  // Idempotent — only closes if still OPEN (prevents double-close races between
-  // checkStopLossTakeProfit, checkMarginCalls, and the user's manual close).
-  await prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const closeResult = await tx.trade.updateMany({
       where: { id: trade.id, status: 'OPEN' },
       data: { close_price: closePriceInt, pnl: pnlCents, status, close_time: new Date() },
     });
     if (closeResult.count === 0) {
-      // Already closed by another worker — bail out without further side effects
-      return;
+      return { closed: false } as const;
     }
 
     const account = await tx.account.findFirst({ where: { id: accountId, tenant_id: trade.tenant_id } });
-    if (account) {
-      const leverage = account.leverage || 100;
-      const marginRelease = calculateMarginCents(openPriceFloat, trade.volume, lotSize, leverage);
-      const newBalanceRaw = BigInt(account.balance) + pnlCents;
-      const newMarginUsedRaw = BigInt(account.margin_used) - marginRelease;
+    if (!account) return { closed: true } as const;
 
-      // ESMA Negative Balance Protection: clamp to 0
-      const safeBalance = newBalanceRaw < 0n ? 0n : newBalanceRaw;
-      const safeMargin = newMarginUsedRaw < 0n ? 0n : newMarginUsedRaw;
-      const safeEquity = safeBalance;
+    const leverage = account.leverage || 100;
+    const marginRelease = calculateMarginCents(openPriceFloat, trade.volume, lotSize, leverage);
+    const newBalanceRaw = BigInt(account.balance) + pnlCents;
+    const newMarginUsedRaw = BigInt(account.margin_used) - marginRelease;
 
-      await tx.account.updateMany({
-        where: { id: account.id, tenant_id: trade.tenant_id },
-        data: { balance: safeBalance, margin_used: safeMargin, equity: safeEquity },
-      });
+    // ESMA Negative Balance Protection: clamp to 0
+    const safeBalance = newBalanceRaw < 0n ? 0n : newBalanceRaw;
+    const safeMargin = newMarginUsedRaw < 0n ? 0n : newMarginUsedRaw;
+    const safeEquity = safeBalance;
 
-      await tx.transaction.create({
-        data: {
-          tenant_id: trade.tenant_id,
-          account_id: account.id,
-          type: 'TRADE_PNL',
-          amount: pnlCents,
-          description: `${reason}: ${trade.side} ${trade.volume} ${trade.instrument?.symbol || 'unknown'} P&L`,
-        },
-      });
-    }
+    await tx.account.updateMany({
+      where: { id: account.id, tenant_id: trade.tenant_id },
+      data: { balance: safeBalance, margin_used: safeMargin, equity: safeEquity },
+    });
+
+    await tx.transaction.create({
+      data: {
+        tenant_id: trade.tenant_id,
+        account_id: account.id,
+        type: 'TRADE_PNL',
+        amount: pnlCents,
+        description: `${reason}: ${trade.side} ${trade.volume} ${trade.instrument?.symbol || 'unknown'} P&L`,
+      },
+    });
+
+    return { closed: true, newBalance: safeBalance, newMarginUsed: safeMargin } as const;
   });
 
   logger.info({
@@ -405,6 +440,8 @@ async function closeTradeAtPrice(trade: any, closePrice: number, reason: string)
     closePrice,
     pnl: pnlCents.toString(),
   }, `[PositionMonitor] Position closed — ${reason}`);
+
+  return result;
 }
 
 async function fillPendingOrder(order: any, price: { bid: number; ask: number }) {

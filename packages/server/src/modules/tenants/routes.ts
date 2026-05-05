@@ -1,0 +1,315 @@
+import { FastifyInstance } from 'fastify';
+import bcrypt from 'bcrypt';
+import { z } from 'zod';
+import { prisma, createTenantSchema } from '../../shared/database/prisma';
+import { requireSuperAdmin } from '../../shared/middleware/auth';
+import { BCRYPT_SALT_ROUNDS, ALL_INSTRUMENTS } from '@tradexlabel/shared';
+import { TenantQuery } from '../../shared/database/tenant-queries';
+import { logger } from '../../shared/utils/index';
+
+const CreateTenantSchema = z.object({
+  name: z.string().min(1),
+  domain: z.string().min(1),
+  slug: z.string().min(2).max(50).regex(/^[a-z0-9_]+$/),
+  execution_mode: z.enum(['A_BOOK', 'B_BOOK', 'B_BOOK_DEALER']).default('B_BOOK'),
+  admin_email: z.string().email(),
+  admin_password: z.string().min(8),
+  admin_name: z.string().min(1),
+  config: z.any().optional(),
+});
+
+export async function tenantRoutes(fastify: FastifyInstance) {
+  // List tenants (superadmin)
+  fastify.get('/api/v1/super/tenants', {
+    preHandler: [requireSuperAdmin],
+  }, async (request, reply) => {
+    const tenants = await prisma.tenant.findMany({
+      include: { admins: { select: { id: true, email: true, name: true, role: true } } },
+      orderBy: { created_at: 'desc' },
+    });
+    return reply.send({ data: tenants });
+  });
+
+  // Create tenant (superadmin)
+  fastify.post('/api/v1/super/tenants', {
+    preHandler: [requireSuperAdmin],
+  }, async (request, reply) => {
+    const parsed = CreateTenantSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Validation failed', code: 'VALIDATION_ERROR', details: parsed.error.flatten() });
+    }
+
+    const { slug, name, domain, execution_mode, admin_email, admin_password, admin_name, config } = parsed.data;
+
+    // Check unique
+    const existing = await prisma.tenant.findFirst({ where: { OR: [{ slug }, { domain }] } });
+    if (existing) {
+      return reply.status(409).send({ error: 'Tenant slug or domain already exists', code: 'TENANT_EXISTS' });
+    }
+
+    // Create tenant
+    const tenant = await prisma.tenant.create({
+      data: {
+        name,
+        domain,
+        slug,
+        execution_mode,
+        config: JSON.stringify(config || {
+          branding: { logo_url: '', primary_color: '#2563eb', company_name: name },
+          trading: {
+            default_leverage: 100,
+            max_leverage: 500,
+            margin_call_level: 100,
+            stop_out_level: 50,
+            max_positions: 100,
+            max_volume_per_trade: 50,
+          },
+        }),
+      },
+    });
+
+    // Create tenant admin
+    const passwordHash = await bcrypt.hash(admin_password, BCRYPT_SALT_ROUNDS);
+    await prisma.tenantAdmin.create({
+      data: {
+        tenant_id: tenant.id,
+        email: admin_email,
+        password_hash: passwordHash,
+        name: admin_name,
+      },
+    });
+
+    // Create schema and tables
+    await createTenantSchema(slug);
+
+    // Seed instruments
+    const tq = new TenantQuery(tenant.id);
+    for (const inst of ALL_INSTRUMENTS) {
+      await tq.upsertInstrument({
+        symbol: inst.symbol,
+        display_name: inst.display,
+        type: inst.type,
+        pip_size: inst.pip_size,
+        lot_size: inst.lot_size,
+        base_spread: inst.base_spread,
+      });
+    }
+
+    logger.info({ tenantId: tenant.id, slug }, 'Tenant created');
+    await auditLog(request, 'CREATE_TENANT', `tenant:${tenant.id}`, { name, slug, execution_mode });
+
+    return reply.status(201).send({ data: tenant });
+  });
+
+  // Update tenant (superadmin)
+  fastify.patch<{ Params: { id: string } }>('/api/v1/super/tenants/:id', {
+    preHandler: [requireSuperAdmin],
+  }, async (request, reply) => {
+    const { id } = request.params;
+    const body = request.body as any;
+
+    const tenant = await prisma.tenant.update({
+      where: { id },
+      data: {
+        name: body.name,
+        execution_mode: body.execution_mode,
+        config: body.config,
+        is_active: body.is_active,
+      },
+    });
+
+    await auditLog(request, 'UPDATE_TENANT', `tenant:${id}`, { changes: body });
+    return reply.send({ data: tenant });
+  });
+
+  // Monitoring (superadmin)
+  fastify.get('/api/v1/super/monitoring', {
+    preHandler: [requireSuperAdmin],
+  }, async (request, reply) => {
+    const tenants = await prisma.tenant.findMany({ where: { is_active: true } });
+    const stats = {
+      total_tenants: tenants.length,
+      active_tenants: tenants.length,
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
+      node_version: process.version,
+    };
+    return reply.send({ data: stats });
+  });
+
+  // ─── Analytics per broker ───
+  fastify.get('/api/v1/super/analytics', {
+    preHandler: [requireSuperAdmin],
+  }, async (request, reply) => {
+    const tenants = await prisma.tenant.findMany({ include: { admins: { select: { email: true } } } });
+    const analytics = [];
+
+    for (const tenant of tenants) {
+      const [userCount, accountStats, tradeStats, openPositions, closedTrades] = await Promise.all([
+        prisma.user.count({ where: { tenant_id: tenant.id } }),
+        prisma.account.aggregate({ where: { tenant_id: tenant.id }, _sum: { balance: true, equity: true, margin_used: true }, _count: true }),
+        prisma.trade.aggregate({ where: { tenant_id: tenant.id, status: 'CLOSED' }, _count: true, _sum: { pnl: true, commission: true } }),
+        prisma.trade.count({ where: { tenant_id: tenant.id, status: 'OPEN' } }),
+        prisma.trade.count({ where: { tenant_id: tenant.id, status: 'CLOSED' } }),
+      ]);
+
+      const subscription = await prisma.subscription.findFirst({
+        where: { tenant_id: tenant.id, status: 'ACTIVE' },
+        include: { plan: { select: { name: true, price_cents: true } } },
+      });
+
+      analytics.push({
+        tenant_id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        execution_mode: tenant.execution_mode,
+        is_active: tenant.is_active,
+        admin_email: tenant.admins[0]?.email || '',
+        users: userCount,
+        accounts: accountStats._count,
+        total_balance_cents: (accountStats._sum.balance ?? BigInt(0)).toString(),
+        total_equity_cents: (accountStats._sum.equity ?? BigInt(0)).toString(),
+        total_margin_used_cents: (accountStats._sum.margin_used ?? BigInt(0)).toString(),
+        open_positions: openPositions,
+        closed_trades: closedTrades,
+        broker_pnl_cents: (tradeStats._sum.pnl ?? BigInt(0)).toString(),
+        total_commissions_cents: (tradeStats._sum.commission ?? BigInt(0)).toString(),
+        plan: subscription?.plan?.name || 'No Plan',
+        plan_price_cents: subscription?.plan?.price_cents || 0,
+        subscription_status: subscription?.status || 'NONE',
+      });
+    }
+
+    return reply.send({ data: analytics });
+  });
+
+  // ─── Plans CRUD ───
+  fastify.get('/api/v1/super/plans', {
+    preHandler: [requireSuperAdmin],
+  }, async (request, reply) => {
+    const plans = await prisma.plan.findMany({ orderBy: { price_cents: 'asc' } });
+    return reply.send({ data: plans });
+  });
+
+  fastify.post('/api/v1/super/plans', {
+    preHandler: [requireSuperAdmin],
+  }, async (request, reply) => {
+    const body = request.body as any;
+    const plan = await prisma.plan.create({
+      data: {
+        name: body.name,
+        description: body.description || '',
+        price_cents: body.price_cents || 0,
+        max_users: body.max_users || 100,
+        max_instruments: body.max_instruments || 50,
+        features: JSON.stringify(body.features || {}),
+      },
+    });
+    await auditLog(request, 'CREATE_PLAN', `plan:${plan.id}`, { name: plan.name });
+    return reply.status(201).send({ data: plan });
+  });
+
+  // ─── Subscriptions ───
+  fastify.get('/api/v1/super/subscriptions', {
+    preHandler: [requireSuperAdmin],
+  }, async (request, reply) => {
+    const subs = await prisma.subscription.findMany({
+      include: { plan: true, invoices: { orderBy: { created_at: 'desc' }, take: 3 } },
+      orderBy: { created_at: 'desc' },
+    });
+    return reply.send({ data: subs });
+  });
+
+  fastify.post('/api/v1/super/subscriptions', {
+    preHandler: [requireSuperAdmin],
+  }, async (request, reply) => {
+    const body = request.body as any;
+    const plan = await prisma.plan.findUnique({ where: { id: body.plan_id } });
+    if (!plan) return reply.status(404).send({ error: 'Plan not found', code: 'PLAN_NOT_FOUND' });
+
+    // Cancel existing active subscription
+    await prisma.subscription.updateMany({
+      where: { tenant_id: body.tenant_id, status: 'ACTIVE' },
+      data: { status: 'CANCELLED', ends_at: new Date() },
+    });
+
+    const sub = await prisma.subscription.create({
+      data: {
+        tenant_id: body.tenant_id,
+        plan_id: body.plan_id,
+        status: body.trial ? 'TRIAL' : 'ACTIVE',
+        trial_ends_at: body.trial ? new Date(Date.now() + 14 * 86400000) : null,
+      },
+    });
+
+    // Create first invoice
+    const now = new Date();
+    const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, now.getDate());
+    await prisma.invoice.create({
+      data: {
+        subscription_id: sub.id,
+        tenant_id: body.tenant_id,
+        amount_cents: plan.price_cents,
+        status: body.trial ? 'PENDING' : 'PENDING',
+        period_start: now,
+        period_end: nextMonth,
+      },
+    });
+
+    await auditLog(request, 'CREATE_SUBSCRIPTION', `tenant:${body.tenant_id}`, { plan: plan.name });
+    return reply.status(201).send({ data: sub });
+  });
+
+  // ─── Invoices ───
+  fastify.get('/api/v1/super/invoices', {
+    preHandler: [requireSuperAdmin],
+  }, async (request, reply) => {
+    const invoices = await prisma.invoice.findMany({
+      orderBy: { created_at: 'desc' },
+      take: 100,
+    });
+    return reply.send({ data: invoices });
+  });
+
+  fastify.patch<{ Params: { id: string } }>('/api/v1/super/invoices/:id/pay', {
+    preHandler: [requireSuperAdmin],
+  }, async (request, reply) => {
+    const invoice = await prisma.invoice.update({
+      where: { id: request.params.id },
+      data: { status: 'PAID', paid_at: new Date() },
+    });
+    await auditLog(request, 'MARK_INVOICE_PAID', `invoice:${invoice.id}`, { amount: invoice.amount_cents });
+    return reply.send({ data: invoice });
+  });
+
+  // ─── Audit Logs ───
+  fastify.get('/api/v1/super/audit-logs', {
+    preHandler: [requireSuperAdmin],
+  }, async (request, reply) => {
+    const logs = await prisma.auditLog.findMany({
+      orderBy: { created_at: 'desc' },
+      take: 200,
+    });
+    return reply.send({ data: logs });
+  });
+}
+
+// Audit log helper
+async function auditLog(request: any, action: string, target: string, details: any = {}) {
+  try {
+    const actorId = request.userData?.sub || 'system';
+    const ip = request.ip || '';
+    await prisma.auditLog.create({
+      data: {
+        actor_id: actorId,
+        actor_type: 'superadmin',
+        action,
+        target,
+        details: JSON.stringify(details),
+        ip_address: ip,
+      },
+    });
+  } catch (err) {
+    logger.error({ err }, 'Failed to write audit log');
+  }
+}

@@ -1,0 +1,284 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* ── Light Theme (Bicolor: dark sidebar + light content) ── */
+  :root {
+    --background: 220 20% 96%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 217 91% 55%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 14% 94%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 220 14% 94%;
+    --muted-foreground: 220 9% 46%;
+    --accent: 220 14% 97%;
+    --accent-foreground: 222 47% 11%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 13% 91%;
+    --input: 220 13% 93%;
+    --ring: 217 91% 55%;
+    --radius: 0.75rem;
+
+    --color-buy: #22c55e;
+    --color-sell: #ef4444;
+
+    --chart-bg: #ffffff;
+    --chart-text: #6b7280;
+    --chart-grid: #f3f4f6;
+    --chart-border: #e5e7eb;
+    --chart-crosshair: #3b82f6;
+
+    /* Bicolor surfaces — dark sidebar in light mode (like eToro) */
+    --surface-sidebar: 222 47% 11%;
+    --surface-sidebar-fg: 210 40% 98%;
+    --surface-sidebar-muted: 215 20% 55%;
+    --surface-sidebar-border: 220 30% 18%;
+    --surface-sidebar-hover: 220 33% 16%;
+    --surface-sidebar-active: 217 91% 55%;
+
+    --surface-header: 0 0% 100%;
+    --surface-topbar: 220 20% 97%;
+  }
+
+  /* ── Dark Theme (Bicolor: deeper sidebar + lighter content) ── */
+  .dark {
+    --background: 222 47% 6%;
+    --foreground: 210 40% 98%;
+    --card: 222 40% 9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222 40% 9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 217 91% 60%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 220 30% 13%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 220 30% 13%;
+    --muted-foreground: 215 20% 50%;
+    --accent: 220 33% 16%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 220 25% 14%;
+    --input: 220 30% 15%;
+    --ring: 217 91% 60%;
+    --radius: 0.75rem;
+
+    --color-buy: #22c55e;
+    --color-sell: #ef4444;
+
+    --chart-bg: #0c1220;
+    --chart-text: #6b7280;
+    --chart-grid: #151e2e;
+    --chart-border: #1e293b;
+    --chart-crosshair: #3b82f6;
+
+    /* Bicolor surfaces — deeper sidebar in dark mode */
+    --surface-sidebar: 224 55% 4%;
+    --surface-sidebar-fg: 210 40% 90%;
+    --surface-sidebar-muted: 215 20% 45%;
+    --surface-sidebar-border: 220 30% 10%;
+    --surface-sidebar-hover: 220 33% 10%;
+    --surface-sidebar-active: 217 91% 60%;
+
+    --surface-header: 222 40% 9%;
+    --surface-topbar: 222 45% 7%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'tnum';
+    transition: background-color 0.3s, color 0.3s;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.2);
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.4);
+}
+
+/* Price flash animations */
+@keyframes flash-green {
+  0% { background-color: rgba(34, 197, 94, 0.25); }
+  100% { background-color: transparent; }
+}
+@keyframes flash-red {
+  0% { background-color: rgba(239, 68, 68, 0.25); }
+  100% { background-color: transparent; }
+}
+.flash-up {
+  animation: flash-green 0.6s ease-out;
+}
+.flash-down {
+  animation: flash-red 0.6s ease-out;
+}
+
+/* Pulse for live indicator */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.pulse-live {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+/* Tabular numbers for prices */
+.price-value {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+/* No text selection on trading UI elements */
+.no-select {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ─── Modern Consumer-App Styles ─── */
+
+/* Floating cards — no borders, just shadows (eToro/Revolut style) */
+.card-modern {
+  border: none !important;
+  border-radius: var(--radius);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: box-shadow 0.25s ease, transform 0.2s ease;
+}
+.card-modern:hover {
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.08), 0 4px 10px rgba(0, 0, 0, 0.04);
+}
+.dark .card-modern {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3), 0 0 1px rgba(255, 255, 255, 0.05) inset;
+}
+.dark .card-modern:hover {
+  box-shadow: 0 8px 25px rgba(0, 0, 0, 0.4), 0 0 1px rgba(255, 255, 255, 0.08) inset;
+}
+
+/* Soft button with press feedback */
+.btn-soft {
+  border-radius: var(--radius);
+  transition: all 0.2s ease;
+}
+.btn-soft:hover {
+  transform: translateY(-1px);
+}
+.btn-soft:active {
+  transform: scale(0.97) translateY(0);
+}
+
+/* Glass morphism */
+.glass {
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  background: hsl(var(--card) / 0.7);
+}
+
+/* Gradient accent backgrounds */
+.gradient-primary {
+  background: linear-gradient(135deg, hsl(var(--primary)), hsl(217 91% 45%));
+}
+.gradient-buy {
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+}
+.gradient-sell {
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+}
+
+/* Hero gradient for welcome banners */
+.gradient-hero {
+  background: linear-gradient(135deg, hsl(var(--primary)), hsl(217 80% 65%), hsl(270 60% 60%));
+}
+
+/* Smooth theme transitions */
+.theme-transition,
+.theme-transition * {
+  transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* ─── Bicolor Sidebar Surface ─── */
+.surface-sidebar {
+  background-color: hsl(var(--surface-sidebar));
+  color: hsl(var(--surface-sidebar-fg));
+}
+.surface-sidebar .sidebar-muted {
+  color: hsl(var(--surface-sidebar-muted));
+}
+.surface-sidebar .sidebar-border {
+  border-color: hsl(var(--surface-sidebar-border));
+}
+.surface-sidebar .sidebar-hover:hover {
+  background-color: hsl(var(--surface-sidebar-hover));
+}
+.surface-sidebar .sidebar-active {
+  background-color: hsl(var(--surface-sidebar-active) / 0.15);
+  color: hsl(var(--surface-sidebar-active));
+}
+
+.surface-topbar {
+  background-color: hsl(var(--surface-topbar));
+}
+
+/* ─── Trading Terminal Inputs ─── */
+.input-field {
+  @apply w-full bg-secondary/20 rounded-xl text-xs px-3 py-2 font-mono text-foreground placeholder:text-muted-foreground/40;
+  @apply focus:outline-none focus:ring-2 focus:ring-primary/20 transition-shadow;
+}
+
+/* Animate-in utilities */
+.animate-in {
+  animation-fill-mode: both;
+  animation-duration: 200ms;
+}
+.slide-in-from-left {
+  animation-name: slideInFromLeft;
+}
+.slide-in-from-right {
+  animation-name: slideInFromRight;
+}
+.slide-in-from-top-2 {
+  animation-name: slideInFromTop;
+}
+.fade-in {
+  animation-name: fadeIn;
+}
+@keyframes slideInFromLeft {
+  from { transform: translateX(-8px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes slideInFromRight {
+  from { transform: translateX(8px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes slideInFromTop {
+  from { transform: translateY(-4px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Hide scrollbar but keep scroll */
+.scrollbar-none::-webkit-scrollbar { display: none; }
+.scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }

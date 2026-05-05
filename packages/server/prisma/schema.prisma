@@ -1,0 +1,584 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Global Tables ───
+
+model Tenant {
+  id             String   @id @default(uuid())
+  name           String
+  domain         String   @unique
+  slug           String   @unique
+  execution_mode String   @default("B_BOOK")
+  config         String   @default("{}")
+  is_active      Boolean  @default(true)
+  created_at     DateTime @default(now())
+  updated_at     DateTime @updatedAt
+
+  admins TenantAdmin[]
+
+  @@map("tenants")
+}
+
+model TenantAdmin {
+  id            String   @id @default(uuid())
+  tenant_id     String
+  email         String
+  password_hash String
+  name          String
+  role          String   @default("admin")
+  is_active     Boolean  @default(true)
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenant_id], references: [id])
+
+  @@unique([tenant_id, email])
+  @@map("tenant_admins")
+}
+
+model SuperAdmin {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  password_hash String
+  name          String
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  @@map("superadmins")
+}
+
+// ─── Tenant-scoped Tables (tenant_id column for isolation) ───
+
+model User {
+  id            String   @id @default(uuid())
+  tenant_id     String
+  email         String
+  password_hash String
+  name          String
+  phone         String   @default("")
+  country       String   @default("")
+  status        String   @default("ACTIVE")
+  kyc_status    String   @default("NONE")
+  lead_id       String?                      // Link back to originating lead
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  accounts Account[]
+  trades   Trade[]
+  orders   Order[]
+
+  @@unique([tenant_id, email])
+  @@map("users")
+}
+
+model Account {
+  id          String   @id @default(uuid())
+  tenant_id   String
+  user_id     String
+  currency    String   @default("USD")
+  balance     BigInt   @default(0)
+  margin_used BigInt   @default(0)
+  equity      BigInt   @default(0)
+  leverage    Int      @default(100)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  user         User          @relation(fields: [user_id], references: [id])
+  trades       Trade[]
+  transactions Transaction[]
+
+  @@map("accounts")
+}
+
+model Instrument {
+  id            String  @id @default(uuid())
+  tenant_id     String
+  symbol        String
+  display_name  String
+  type          String
+  pip_size      Float
+  lot_size      Int
+  base_spread   Int     @default(0)
+  spread_markup Int     @default(0)
+  min_volume    Float   @default(0.01)
+  max_volume    Float   @default(50)
+  is_active     Boolean @default(true)
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  trades        Trade[]
+  orders        Order[]
+  price_history PriceHistory[]
+
+  @@unique([tenant_id, symbol])
+  @@map("instruments")
+}
+
+model Trade {
+  id            String    @id @default(uuid())
+  tenant_id     String
+  user_id       String
+  account_id    String
+  instrument_id String
+  side          String
+  volume        Float
+  open_price    BigInt
+  close_price   BigInt?
+  open_time     DateTime  @default(now())
+  close_time    DateTime?
+  pnl           BigInt    @default(0)
+  commission    BigInt    @default(0)
+  swap          BigInt    @default(0)
+  stop_loss          Float?
+  take_profit        Float?
+  pnl_target         BigInt?   // dealer-specified target P&L (cents)
+  scheduled_close_at DateTime? // when to auto-close (dealer scheduled trades)
+  status             String    @default("OPEN")
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
+
+  user       User       @relation(fields: [user_id], references: [id])
+  account    Account    @relation(fields: [account_id], references: [id])
+  instrument Instrument @relation(fields: [instrument_id], references: [id])
+
+  dealer_interventions DealerIntervention[]
+
+  @@map("trades")
+}
+
+model Order {
+  id            String    @id @default(uuid())
+  tenant_id     String
+  user_id       String
+  instrument_id String
+  type          String
+  side          String
+  volume        Float
+  price         BigInt?
+  stop_loss     Float?
+  take_profit   Float?
+  status        String    @default("PENDING")
+  filled_at     DateTime?
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+
+  user       User       @relation(fields: [user_id], references: [id])
+  instrument Instrument @relation(fields: [instrument_id], references: [id])
+
+  @@map("orders")
+}
+
+model PriceHistory {
+  id            String   @id @default(uuid())
+  tenant_id     String
+  instrument_id String
+  timeframe     String
+  open          Float
+  high          Float
+  low           Float
+  close         Float
+  volume        Float    @default(0)
+  timestamp     DateTime
+
+  instrument Instrument @relation(fields: [instrument_id], references: [id])
+
+  @@unique([instrument_id, timeframe, timestamp])
+  @@map("price_history")
+}
+
+model Transaction {
+  id          String   @id @default(uuid())
+  tenant_id   String
+  account_id  String
+  type        String
+  amount      BigInt
+  description String   @default("")
+  created_at  DateTime @default(now())
+
+  account Account @relation(fields: [account_id], references: [id])
+
+  @@map("transactions")
+}
+
+model DealerIntervention {
+  id             String   @id @default(uuid())
+  tenant_id      String
+  trade_id       String
+  dealer_id      String
+  action         String
+  original_price BigInt?
+  modified_price BigInt?
+  reason         String
+  created_at     DateTime @default(now())
+
+  trade Trade @relation(fields: [trade_id], references: [id])
+
+  @@map("dealer_interventions")
+}
+
+// ─── Billing & Subscription ───
+
+model Plan {
+  id            String   @id @default(uuid())
+  name          String   @unique
+  description   String   @default("")
+  price_cents   Int      @default(0)     // monthly price in cents
+  max_users     Int      @default(100)
+  max_instruments Int    @default(50)
+  features      String   @default("{}") // JSON features list
+  is_active     Boolean  @default(true)
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+model Subscription {
+  id            String   @id @default(uuid())
+  tenant_id     String
+  plan_id       String
+  status        String   @default("ACTIVE") // ACTIVE, CANCELLED, EXPIRED, TRIAL
+  starts_at     DateTime @default(now())
+  ends_at       DateTime?
+  trial_ends_at DateTime?
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  plan     Plan      @relation(fields: [plan_id], references: [id])
+  invoices Invoice[]
+
+  @@map("subscriptions")
+}
+
+model Invoice {
+  id              String   @id @default(uuid())
+  subscription_id String
+  tenant_id       String
+  amount_cents    Int
+  status          String   @default("PENDING") // PENDING, PAID, OVERDUE, CANCELLED
+  period_start    DateTime
+  period_end      DateTime
+  paid_at         DateTime?
+  created_at      DateTime @default(now())
+
+  subscription Subscription @relation(fields: [subscription_id], references: [id])
+
+  @@map("invoices")
+}
+
+// ─── Audit Log ───
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actor_id   String
+  actor_type String   // superadmin, admin, system
+  action     String   // CREATE_TENANT, UPDATE_TENANT, DISABLE_TENANT, etc.
+  target     String   @default("") // e.g. "tenant:uuid" or "user:uuid"
+  details    String   @default("{}") // JSON
+  ip_address String   @default("")
+  created_at DateTime @default(now())
+
+  @@map("audit_logs")
+}
+
+model DealerSettings {
+  id                String  @id @default(uuid())
+  tenant_id         String  @unique
+  max_slippage      Int     @default(3)
+  requote_enabled   Boolean @default(false)
+  spread_multiplier Float   @default(1.0)
+  auto_delay_ms     Int     @default(0)
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  @@map("dealer_settings")
+}
+
+// ─── CRM Module ───
+
+model Lead {
+  id            String    @id @default(uuid())
+  lead_number   Int       @default(0)
+  tenant_id     String
+  email         String
+  phone         String    @default("")
+  first_name    String
+  last_name     String
+  country       String    @default("")
+  language      String    @default("en")
+  source        String    @default("DIRECT")  // DIRECT, AFFILIATE, GOOGLE, FACEBOOK, etc.
+  affiliate_id  String?
+  campaign_id   String?
+  status        String    @default("NEW")     // NEW, CONTACTED, INTERESTED, DEMO, FTD, CONVERTED, LOST, DO_NOT_CALL
+  assigned_to   String?                       // TenantAdmin id (seller or retention agent)
+  department    String    @default("SELLER")  // SELLER or RETENTION
+  priority      String    @default("MEDIUM")  // LOW, MEDIUM, HIGH, VIP
+  ftd_amount    BigInt    @default(0)         // First Time Deposit (cents)
+  ftd_date      DateTime?
+  last_contact  DateTime?
+  next_follow_up DateTime?
+  converted_user_id String?                   // Link to User if converted
+  notes_count   Int       @default(0)
+  calls_count   Int       @default(0)
+  ip_address    String    @default("")
+  utm_source    String    @default("")
+  utm_medium    String    @default("")
+  utm_campaign  String    @default("")
+  utm_content   String    @default("")
+  custom_fields String    @default("{}")      // JSON for extra fields
+  kyc_status    String    @default("NONE")   // NONE, SENT, IN_PROGRESS, COMPLETED, EXPIRED, APPROVED, REJECTED
+  kyc_verification_id String?               // KYC backend verification UUID
+  kyc_token     String?                      // KYC verification token
+  kyc_url       String?                      // Full KYC verification URL
+  kyc_sent_at   DateTime?
+  kyc_completed_at DateTime?
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+
+  affiliate  Affiliate?  @relation(fields: [affiliate_id], references: [id])
+  campaign   Campaign?   @relation(fields: [campaign_id], references: [id])
+  notes      Note[]
+  calls      Call[]
+  tasks      CrmTask[]
+
+  @@unique([tenant_id, email])
+  @@index([tenant_id, status])
+  @@index([tenant_id, assigned_to])
+  @@index([tenant_id, department])
+  @@map("leads")
+}
+
+model Affiliate {
+  id              String   @id @default(uuid())
+  tenant_id       String
+  name            String
+  email           String
+  phone           String   @default("")
+  company         String   @default("")
+  tracking_code   String   @unique     // Unique code used in tracking URLs
+  api_key         String   @unique     // API key for affiliate API access
+  commission_type String   @default("CPA")  // CPA, CPL, REVENUE_SHARE, HYBRID
+  cpa_amount      BigInt   @default(0)      // CPA commission (cents) per FTD
+  cpl_amount      BigInt   @default(0)      // CPL commission (cents) per lead
+  revenue_share   Float    @default(0)      // Revenue share % (0-100)
+  min_ftd         BigInt   @default(0)      // Minimum FTD for CPA to apply (cents)
+  total_leads     Int      @default(0)
+  total_ftds      Int      @default(0)
+  total_commission BigInt  @default(0)       // Total earned (cents)
+  total_paid      BigInt   @default(0)       // Total paid out (cents)
+  status          String   @default("ACTIVE") // ACTIVE, PAUSED, BLOCKED
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  leads       Lead[]
+  commissions Commission[]
+
+  @@unique([tenant_id, email])
+  @@index([tenant_id])
+  @@map("affiliates")
+}
+
+model Commission {
+  id            String   @id @default(uuid())
+  tenant_id     String
+  affiliate_id  String
+  lead_id       String   @default("")
+  type          String   // CPA, CPL, REVENUE_SHARE
+  amount        BigInt                  // Commission amount (cents)
+  status        String   @default("PENDING") // PENDING, APPROVED, PAID, REJECTED
+  description   String   @default("")
+  paid_at       DateTime?
+  created_at    DateTime @default(now())
+
+  affiliate Affiliate @relation(fields: [affiliate_id], references: [id])
+
+  @@index([tenant_id, affiliate_id])
+  @@map("commissions")
+}
+
+model Campaign {
+  id            String   @id @default(uuid())
+  tenant_id     String
+  name          String
+  description   String   @default("")
+  source        String   @default("")       // GOOGLE, FACEBOOK, EMAIL, SMS, etc.
+  budget_cents  BigInt   @default(0)
+  spent_cents   BigInt   @default(0)
+  total_leads   Int      @default(0)
+  total_ftds    Int      @default(0)
+  status        String   @default("ACTIVE") // ACTIVE, PAUSED, ENDED
+  starts_at     DateTime @default(now())
+  ends_at       DateTime?
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+
+  leads Lead[]
+
+  @@index([tenant_id])
+  @@map("campaigns")
+}
+
+model Call {
+  id          String   @id @default(uuid())
+  tenant_id   String
+  lead_id     String
+  agent_id    String                    // TenantAdmin id
+  direction   String   @default("OUTBOUND") // INBOUND, OUTBOUND
+  status      String   @default("COMPLETED") // COMPLETED, MISSED, VOICEMAIL, NO_ANSWER, BUSY
+  duration    Int      @default(0)      // Duration in seconds
+  phone       String   @default("")
+  notes       String   @default("")
+  recording_url String @default("")
+  created_at  DateTime @default(now())
+
+  lead Lead @relation(fields: [lead_id], references: [id])
+
+  @@index([tenant_id, agent_id])
+  @@index([tenant_id, lead_id])
+  @@map("calls")
+}
+
+model Note {
+  id         String   @id @default(uuid())
+  tenant_id  String
+  lead_id    String
+  author_id  String                     // TenantAdmin id
+  content    String
+  type       String   @default("NOTE")  // NOTE, EMAIL, SMS, SYSTEM
+  created_at DateTime @default(now())
+
+  lead Lead @relation(fields: [lead_id], references: [id])
+
+  @@index([tenant_id, lead_id])
+  @@map("notes")
+}
+
+model TradeProgram {
+  id              String   @id @default(uuid())
+  tenant_id       String
+  name            String   @default("")
+  client_ids      String                     // JSON array of user IDs
+  instrument_type String   @default("CRYPTO") // CRYPTO, FOREX, INDICES, COMMODITIES, ALL
+  target_pct      Float                       // Target gain % (e.g. 45 = +45%)
+  invest_pct      Float                       // % of balance to use per trade
+  period          String                      // 1W, 2W, 1M, 2M, 3M
+  start_date      DateTime @default(now())
+  end_date        DateTime
+  trades_per_day  Int      @default(3)        // how many trades per day
+  min_trade_pct   Float    @default(-5)       // min single trade P&L %
+  max_trade_pct   Float    @default(15)       // max single trade P&L %
+  status          String   @default("ACTIVE") // ACTIVE, PAUSED, COMPLETED, CANCELLED
+  progress_pct    Float    @default(0)        // current cumulative P&L %
+  total_trades    Int      @default(0)
+  created_by      String                      // admin ID
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@index([tenant_id, status])
+  @@map("trade_programs")
+}
+
+model BrokerConfig {
+  id              String   @id @default(uuid())
+  tenant_id       String   @unique
+  company_name    String   @default("")
+  logo_url        String   @default("")
+  website         String   @default("")
+  support_email   String   @default("")
+  support_phone   String   @default("")
+  address         String   @default("")
+  primary_color   String   @default("#6366f1")
+  smtp_host       String   @default("")
+  smtp_port       Int      @default(587)
+  smtp_user       String   @default("")
+  smtp_pass       String   @default("")
+  smtp_from_name  String   @default("")
+  smtp_from_email String   @default("")
+  smtp_secure     Boolean  @default(false)
+  ip_whitelist    String   @default("")
+  sip_domain      String   @default("")
+  created_at      DateTime @default(now())
+  updated_at      DateTime @updatedAt
+
+  @@map("broker_configs")
+}
+
+model EmailTemplate {
+  id          String   @id @default(uuid())
+  tenant_id   String
+  name        String
+  subject     String
+  body_html   String                      // HTML with {{variables}}
+  category    String   @default("GENERAL") // GENERAL, WELCOME, KYC, DEPOSIT, RETENTION, PROMOTION, CUSTOM
+  created_by  String                       // TenantAdmin id
+  is_active   Boolean  @default(true)
+  created_at  DateTime @default(now())
+  updated_at  DateTime @updatedAt
+
+  @@index([tenant_id])
+  @@map("email_templates")
+}
+
+model EmailLog {
+  id          String   @id @default(uuid())
+  tenant_id   String
+  lead_id     String?
+  template_id String?
+  to_email    String
+  to_name     String   @default("")
+  subject     String
+  body_html   String
+  status      String   @default("SENT") // SENT, FAILED, BOUNCED
+  sent_by     String                     // TenantAdmin id
+  error       String   @default("")
+  created_at  DateTime @default(now())
+
+  @@index([tenant_id, lead_id])
+  @@map("email_logs")
+}
+
+model CrmNotification {
+  id          String   @id @default(uuid())
+  tenant_id   String
+  for_user    String?                      // TenantAdmin id (null = all agents)
+  for_role    String?                      // 'seller', 'retention', 'admin' (null = all)
+  type        String                       // KYC_COMPLETED, TRADE_CLOSED, LEAD_ASSIGNED, FTD_RECEIVED, etc.
+  title       String
+  body        String   @default("")
+  link        String   @default("")        // e.g. lead_id to open
+  is_read     Boolean  @default(false)
+  created_at  DateTime @default(now())
+
+  @@index([tenant_id, for_user, is_read])
+  @@map("crm_notifications")
+}
+
+model CrmTask {
+  id          String    @id @default(uuid())
+  tenant_id   String
+  lead_id     String?
+  assigned_to String                    // TenantAdmin id
+  title       String
+  description String    @default("")
+  type        String    @default("FOLLOW_UP") // FOLLOW_UP, CALL_BACK, EMAIL, DEMO, MEETING
+  priority    String    @default("MEDIUM")    // LOW, MEDIUM, HIGH, URGENT
+  status      String    @default("PENDING")   // PENDING, IN_PROGRESS, COMPLETED, CANCELLED
+  due_at      DateTime
+  completed_at DateTime?
+  created_at  DateTime  @default(now())
+  updated_at  DateTime  @updatedAt
+
+  lead Lead? @relation(fields: [lead_id], references: [id])
+
+  @@index([tenant_id, assigned_to])
+  @@index([tenant_id, status])
+  @@map("crm_tasks")
+}

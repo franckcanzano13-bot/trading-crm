@@ -57,30 +57,68 @@ export function setupWebSocketServer(fastify: FastifyInstance) {
   fastify.get('/ws/account', { websocket: true }, (socket, request) => {
     const client: WsClient = { socket, subscriptions: new Set() };
     clients.add(client);
+    let authTimer: NodeJS.Timeout | null = setTimeout(() => {
+      // Drop unauthenticated clients after 5s
+      if (!client.userId) {
+        try { socket.close(1008, 'auth_timeout'); } catch {}
+      }
+    }, 5000);
 
-    socket.on('message', (data: Buffer) => {
+    socket.on('message', async (data: Buffer) => {
       try {
         const msg = JSON.parse(data.toString());
         if (msg.type === 'auth' && msg.token) {
-          // In production, verify JWT here
-          client.userId = msg.userId;
-          client.tenantId = msg.tenantId;
+          // VULN-002 fix: actually verify the JWT, never trust client-supplied userId/tenantId
+          try {
+            const decoded = await fastify.jwt.verify(msg.token) as { sub: string; tenantId?: string };
+            client.userId = decoded.sub;
+            client.tenantId = decoded.tenantId;
+            if (authTimer) { clearTimeout(authTimer); authTimer = null; }
+            socket.send(JSON.stringify({ type: 'auth_ok' }));
+          } catch {
+            socket.send(JSON.stringify({ type: 'auth_failed' }));
+            try { socket.close(1008, 'auth_failed'); } catch {}
+          }
         }
       } catch {
-        // ignore
+        // ignore malformed messages
       }
     });
 
-    socket.on('close', () => { clients.delete(client); });
-    socket.on('error', () => { clients.delete(client); });
+    socket.on('close', () => { if (authTimer) clearTimeout(authTimer); clients.delete(client); });
+    socket.on('error', () => { if (authTimer) clearTimeout(authTimer); clients.delete(client); });
   });
 
-  // Notifications WebSocket
+  // Notifications WebSocket — same JWT auth model as /ws/account
   fastify.get('/ws/notifications', { websocket: true }, (socket, request) => {
     const client: WsClient = { socket, subscriptions: new Set() };
     clients.add(client);
-    socket.on('close', () => { clients.delete(client); });
-    socket.on('error', () => { clients.delete(client); });
+    let authTimer: NodeJS.Timeout | null = setTimeout(() => {
+      if (!client.userId) { try { socket.close(1008, 'auth_timeout'); } catch {} }
+    }, 5000);
+
+    socket.on('message', async (data: Buffer) => {
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'auth' && msg.token) {
+          try {
+            const decoded = await fastify.jwt.verify(msg.token) as { sub: string; tenantId?: string };
+            client.userId = decoded.sub;
+            client.tenantId = decoded.tenantId;
+            if (authTimer) { clearTimeout(authTimer); authTimer = null; }
+            socket.send(JSON.stringify({ type: 'auth_ok' }));
+          } catch {
+            socket.send(JSON.stringify({ type: 'auth_failed' }));
+            try { socket.close(1008, 'auth_failed'); } catch {}
+          }
+        }
+      } catch {
+        // ignore malformed messages
+      }
+    });
+
+    socket.on('close', () => { if (authTimer) clearTimeout(authTimer); clients.delete(client); });
+    socket.on('error', () => { if (authTimer) clearTimeout(authTimer); clients.delete(client); });
   });
 
   // Listen for price ticks and broadcast

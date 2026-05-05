@@ -4,6 +4,7 @@ import { tenantResolver } from '../../shared/middleware/tenant-resolver';
 import { requireAdmin } from '../../shared/middleware/auth';
 import { serializeBigInt } from '../../shared/utils/index';
 import { prisma } from '../../shared/database/prisma';
+import { audit } from '../../shared/audit';
 
 const UpdateClientSchema = z.object({
   status: z.enum(['ACTIVE', 'INACTIVE', 'BLOCKED']).optional(),
@@ -33,6 +34,16 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
     const user = await request.tenantQuery!.updateUser(request.params.id, parsed.data);
     if (!user) {
       return reply.status(404).send({ error: 'User not found', code: 'USER_NOT_FOUND' });
+    }
+    // Sprint 2.3: audit KYC and status changes (regulatory)
+    if (parsed.data.kyc_status || parsed.data.status) {
+      await audit.log({
+        tenantId: request.tenantId!, actorId: request.userData!.sub, actorType: 'admin',
+        action: parsed.data.kyc_status ? 'KYC_UPDATE' : 'CLIENT_STATUS_UPDATE',
+        target: `user:${request.params.id}`,
+        details: parsed.data,
+        ip: request.ip,
+      });
     }
     return reply.send({ data: serializeBigInt(user) });
   });
@@ -120,6 +131,14 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
       throw err;
     }
 
+    // Sprint 2.3: audit log every deposit
+    await audit.log({
+      tenantId, actorId: request.userData!.sub, actorType: 'admin',
+      action: 'DEPOSIT', target: `account:${accountId}`,
+      details: { amount_cents: amountCents.toString(), new_balance_cents: newBalance.toString(), description },
+      ip: request.ip,
+    });
+
     return reply.send({ data: { balance: newBalance.toString() } });
   });
 
@@ -183,6 +202,14 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
       }
       throw err;
     }
+
+    // Sprint 2.3: audit log every withdrawal
+    await audit.log({
+      tenantId, actorId: request.userData!.sub, actorType: 'admin',
+      action: 'WITHDRAW', target: `account:${accountId}`,
+      details: { amount_cents: amountCents.toString(), new_balance_cents: newBalance.toString(), description },
+      ip: request.ip,
+    });
 
     return reply.send({ data: { balance: newBalance.toString() } });
   });
@@ -294,11 +321,14 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
     });
 
     if (!admin || !admin.is_active) {
+      // Sprint 2.3: audit failed admin login (brute-force trail)
+      await audit.log({ tenantId: tenant_id, actorId: 'unknown', actorType: 'admin', action: 'LOGIN_FAILED', details: { email, reason: 'user_not_found_or_inactive' }, ip: request.ip });
       return reply.status(401).send({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
     }
 
     const valid = await bcrypt.compare(password, admin.password_hash);
     if (!valid) {
+      await audit.log({ tenantId: tenant_id, actorId: admin.id, actorType: 'admin', action: 'LOGIN_FAILED', details: { email, reason: 'wrong_password' }, ip: request.ip });
       return reply.status(401).send({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
     }
 
@@ -311,6 +341,9 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
       { sub: admin.id, email: admin.email, role: jwtRole, tenantId: admin.tenant_id },
       { expiresIn: '7d' }
     );
+
+    // Sprint 2.3: audit successful admin login
+    await audit.log({ tenantId: admin.tenant_id, actorId: admin.id, actorType: 'admin', action: 'LOGIN_SUCCESS', details: { email, role: jwtRole }, ip: request.ip });
 
     return reply.send({
       data: {

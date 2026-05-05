@@ -284,14 +284,17 @@ model Invoice {
 
 model AuditLog {
   id         String   @id @default(uuid())
+  tenant_id  String   @default("")    // empty for superadmin / system actions
   actor_id   String
-  actor_type String   // superadmin, admin, system
-  action     String   // CREATE_TENANT, UPDATE_TENANT, DISABLE_TENANT, etc.
-  target     String   @default("") // e.g. "tenant:uuid" or "user:uuid"
-  details    String   @default("{}") // JSON
+  actor_type String                    // superadmin, admin, dealer, system
+  action     String                    // DEPOSIT, WITHDRAW, KYC_APPROVE, DEALER_INTERVENE, etc.
+  target     String   @default("")     // e.g. "user:uuid", "trade:uuid"
+  details    String   @default("{}")   // JSON: amount, before/after values, reason
   ip_address String   @default("")
   created_at DateTime @default(now())
 
+  @@index([tenant_id, created_at])
+  @@index([actor_id, created_at])
   @@map("audit_logs")
 }
 

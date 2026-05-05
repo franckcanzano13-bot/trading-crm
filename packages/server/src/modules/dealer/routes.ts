@@ -7,6 +7,7 @@ import { serializeBigInt, priceToInt, logger } from '../../shared/utils/index';
 import { getCurrentPrice } from '../pricing/price-store';
 import { TenantQuery } from '../../shared/database/tenant-queries';
 import { prisma } from '../../shared/database/prisma';
+import { audit } from '../../shared/audit';
 
 /**
  * Middleware: enforce that dealer routes only work for tenants with
@@ -183,6 +184,14 @@ export async function dealerRoutes(fastify: FastifyInstance) {
     });
 
     logger.info({ tradeId: trade.id, action: intervention.action, dealerId: request.userData!.sub }, 'Dealer intervention');
+
+    // Sprint 2.3: cross-cutting audit log (in addition to dealer_interventions)
+    await audit.log({
+      tenantId: request.tenantId!, actorId: request.userData!.sub, actorType: 'dealer',
+      action: `DEALER_${intervention.action}`, target: `trade:${trade.id}`,
+      details: { reason: intervention.reason, original_price: trade.open_price?.toString(), modified_price: modifiedPrice?.toString(), pnl_override: intervention.pnl_override },
+      ip: request.ip,
+    });
 
     return reply.status(201).send({ data: serializeBigInt(record) });
   });
@@ -395,10 +404,27 @@ export async function dealerRoutes(fastify: FastifyInstance) {
 
       logger.info({ tradeId: trade.id, pnl: body.pnl_target, invest: Number(investCents), dealerId: request.userData!.sub }, 'Dealer created & closed trade (instant)');
 
+      // Sprint 2.3: audit dealer instant-close trade (regulatory, MiFID II)
+      await audit.log({
+        tenantId: request.tenantId!, actorId: request.userData!.sub, actorType: 'dealer',
+        action: 'DEALER_TRADE_INSTANT_CLOSE', target: `trade:${trade.id}`,
+        details: { symbol: body.symbol, side: body.side, volume: body.volume, invest_cents: investCents.toString(), pnl_cents: pnlCents.toString(), reason: body.reason },
+        ip: request.ip,
+      });
+
       return reply.status(201).send({ data: serializeBigInt(closedTrade || trade) });
     }
 
     logger.info({ tradeId: trade.id, invest: Number(investCents), dealerId: request.userData!.sub }, 'Dealer created open trade');
+
+    // Sprint 2.3: audit dealer open trade
+    await audit.log({
+      tenantId: request.tenantId!, actorId: request.userData!.sub, actorType: 'dealer',
+      action: 'DEALER_TRADE_OPEN', target: `trade:${trade.id}`,
+      details: { symbol: body.symbol, side: body.side, volume: body.volume, invest_cents: investCents.toString(), pnl_target: body.pnl_target, close_after_seconds: body.close_after_seconds, reason: body.reason },
+      ip: request.ip,
+    });
+
     return reply.status(201).send({ data: serializeBigInt(trade) });
   });
 
@@ -474,6 +500,14 @@ export async function dealerRoutes(fastify: FastifyInstance) {
     }
 
     logger.info({ tradeId: trade.id, pnl: body.pnl, dealerId: request.userData!.sub }, 'Dealer closed trade');
+
+    // Sprint 2.3: audit dealer close-trade (regulatory)
+    await audit.log({
+      tenantId: request.tenantId!, actorId: request.userData!.sub, actorType: 'dealer',
+      action: 'DEALER_TRADE_CLOSE', target: `trade:${trade.id}`,
+      details: { pnl_cents: pnlCents.toString(), close_price: body.close_price, reason: body.reason },
+      ip: request.ip,
+    });
 
     return reply.send({ data: { success: true, pnl: pnlCents.toString() } });
   });

@@ -293,31 +293,44 @@ async function closeDealerTrade(trade: any, closePrice: number, reason: string) 
 
   const closePriceInt = priceToInt(closePrice, 5);
 
-  await prisma.trade.update({
-    where: { id: trade.id },
-    data: { close_price: closePriceInt, pnl: finalPnl, status: 'CLOSED', close_time: new Date() },
+  // EXEC-001: Atomic close + balance update + transaction.
+  // Idempotent — only closes if still OPEN (prevents double-close races between
+  // SL/TP, scheduled timer, and periodic checker).
+  await prisma.$transaction(async (tx) => {
+    const closeResult = await tx.trade.updateMany({
+      where: { id: trade.id, status: 'OPEN' },
+      data: { close_price: closePriceInt, pnl: finalPnl, status: 'CLOSED', close_time: new Date() },
+    });
+    if (closeResult.count === 0) {
+      // Already closed by another worker — bail out without further side effects
+      return;
+    }
+
+    if (account) {
+      const newBalanceRaw = BigInt(account.balance) + finalPnl;
+      const newMarginUsedRaw = BigInt(account.margin_used) - investCents;
+
+      // ESMA Negative Balance Protection: clamp to 0
+      const safeBalance = newBalanceRaw < 0n ? 0n : newBalanceRaw;
+      const safeMargin = newMarginUsedRaw < 0n ? 0n : newMarginUsedRaw;
+      const safeEquity = safeBalance - safeMargin < 0n ? 0n : safeBalance - safeMargin;
+
+      await tx.account.updateMany({
+        where: { id: account.id, tenant_id: trade.tenant_id },
+        data: { balance: safeBalance, margin_used: safeMargin, equity: safeEquity },
+      });
+
+      await tx.transaction.create({
+        data: {
+          tenant_id: trade.tenant_id,
+          account_id: account.id,
+          type: 'TRADE_PNL',
+          amount: finalPnl,
+          description: `${reason}: ${trade.side} ${trade.instrument?.symbol || 'unknown'} dealer trade closed`,
+        },
+      });
+    }
   });
-
-  if (account) {
-    const newBalance = BigInt(account.balance) + finalPnl;
-    let newMarginUsed = BigInt(account.margin_used) - investCents;
-    if (newMarginUsed < BigInt(0)) newMarginUsed = BigInt(0);
-
-    await prisma.account.update({
-      where: { id: account.id },
-      data: { balance: newBalance, margin_used: newMarginUsed, equity: newBalance - newMarginUsed },
-    });
-
-    await prisma.transaction.create({
-      data: {
-        tenant_id: trade.tenant_id,
-        account_id: account.id,
-        type: 'TRADE_PNL',
-        amount: finalPnl,
-        description: `${reason}: ${trade.side} ${trade.instrument?.symbol || 'unknown'} dealer trade closed`,
-      },
-    });
-  }
 
   logger.info({
     tradeId: trade.id,
@@ -339,35 +352,50 @@ async function closeTradeAtPrice(trade: any, closePrice: number, reason: string)
 
   const status = reason === 'LIQUIDATED' ? 'LIQUIDATED' : 'CLOSED';
 
-  await prisma.trade.update({
-    where: { id: trade.id },
-    data: { close_price: closePriceInt, pnl: pnlCents, status, close_time: new Date() },
+  // Pre-fetch account if not bundled with trade (read outside tx is ok — we re-resolve inside)
+  const accountId = trade.account?.id || trade.account_id;
+
+  // EXEC-001: Atomic close (SL/TP, liquidation) + balance update + transaction.
+  // Idempotent — only closes if still OPEN (prevents double-close races between
+  // checkStopLossTakeProfit, checkMarginCalls, and the user's manual close).
+  await prisma.$transaction(async (tx) => {
+    const closeResult = await tx.trade.updateMany({
+      where: { id: trade.id, status: 'OPEN' },
+      data: { close_price: closePriceInt, pnl: pnlCents, status, close_time: new Date() },
+    });
+    if (closeResult.count === 0) {
+      // Already closed by another worker — bail out without further side effects
+      return;
+    }
+
+    const account = await tx.account.findFirst({ where: { id: accountId, tenant_id: trade.tenant_id } });
+    if (account) {
+      const leverage = account.leverage || 100;
+      const marginRelease = calculateMarginCents(openPriceFloat, trade.volume, lotSize, leverage);
+      const newBalanceRaw = BigInt(account.balance) + pnlCents;
+      const newMarginUsedRaw = BigInt(account.margin_used) - marginRelease;
+
+      // ESMA Negative Balance Protection: clamp to 0
+      const safeBalance = newBalanceRaw < 0n ? 0n : newBalanceRaw;
+      const safeMargin = newMarginUsedRaw < 0n ? 0n : newMarginUsedRaw;
+      const safeEquity = safeBalance;
+
+      await tx.account.updateMany({
+        where: { id: account.id, tenant_id: trade.tenant_id },
+        data: { balance: safeBalance, margin_used: safeMargin, equity: safeEquity },
+      });
+
+      await tx.transaction.create({
+        data: {
+          tenant_id: trade.tenant_id,
+          account_id: account.id,
+          type: 'TRADE_PNL',
+          amount: pnlCents,
+          description: `${reason}: ${trade.side} ${trade.volume} ${trade.instrument?.symbol || 'unknown'} P&L`,
+        },
+      });
+    }
   });
-
-  // Update account
-  const account = trade.account || await prisma.account.findFirst({ where: { id: trade.account_id } });
-  if (account) {
-    const leverage = account.leverage || 100;
-    const marginRelease = calculateMarginCents(openPriceFloat, trade.volume, lotSize, leverage);
-    const newBalance = BigInt(account.balance) + pnlCents;
-    let newMarginUsed = BigInt(account.margin_used) - marginRelease;
-    if (newMarginUsed < BigInt(0)) newMarginUsed = BigInt(0);
-
-    await prisma.account.update({
-      where: { id: account.id },
-      data: { balance: newBalance, margin_used: newMarginUsed, equity: newBalance },
-    });
-
-    await prisma.transaction.create({
-      data: {
-        tenant_id: trade.tenant_id,
-        account_id: account.id,
-        type: 'TRADE_PNL',
-        amount: pnlCents,
-        description: `${reason}: ${trade.side} ${trade.volume} ${trade.instrument?.symbol || 'unknown'} P&L`,
-      },
-    });
-  }
 
   logger.info({
     tradeId: trade.id,
@@ -381,61 +409,99 @@ async function closeTradeAtPrice(trade: any, closePrice: number, reason: string)
 
 async function fillPendingOrder(order: any, price: { bid: number; ask: number }) {
   const executionPrice = order.side === 'BUY' ? price.ask : price.bid;
-
-  // Find user's account
-  const account = await prisma.account.findFirst({ where: { tenant_id: order.tenant_id, user_id: order.user_id } });
-  if (!account) {
-    logger.warn({ orderId: order.id }, '[PositionMonitor] No account for pending order, cancelling');
-    await prisma.order.update({ where: { id: order.id }, data: { status: 'CANCELLED' } });
-    return;
-  }
-
-  // Check margin
   const lotSize = order.instrument.lot_size;
-  const marginRequired = calculateMarginCents(executionPrice, order.volume, lotSize, account.leverage);
-  const availableMargin = BigInt(account.balance) - BigInt(account.margin_used);
 
-  if (marginRequired > availableMargin) {
-    logger.warn({ orderId: order.id, marginRequired: marginRequired.toString() }, '[PositionMonitor] Insufficient margin for pending order, cancelling');
-    await prisma.order.update({ where: { id: order.id }, data: { status: 'CANCELLED' } });
-    return;
-  }
+  // EXEC-001: Atomic fill — create trade + update order + reserve margin.
+  // Idempotent — only fills if order still PENDING.
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      // Re-check order is still pending
+      const fresh = await tx.order.findFirst({ where: { id: order.id, status: 'PENDING' } });
+      if (!fresh) {
+        return { skipped: true } as const;
+      }
 
-  // Create the trade
-  const trade = await prisma.trade.create({
-    data: {
-      tenant_id: order.tenant_id,
-      user_id: order.user_id,
-      account_id: account.id,
-      instrument_id: order.instrument_id,
+      const account = await tx.account.findFirst({
+        where: { tenant_id: order.tenant_id, user_id: order.user_id },
+      });
+      if (!account) {
+        await tx.order.updateMany({
+          where: { id: order.id, status: 'PENDING' },
+          data: { status: 'CANCELLED' },
+        });
+        return { cancelled: 'NO_ACCOUNT' } as const;
+      }
+
+      const marginRequired = calculateMarginCents(executionPrice, order.volume, lotSize, account.leverage);
+      const availableMargin = BigInt(account.balance) - BigInt(account.margin_used);
+
+      if (marginRequired > availableMargin) {
+        await tx.order.updateMany({
+          where: { id: order.id, status: 'PENDING' },
+          data: { status: 'CANCELLED' },
+        });
+        return { cancelled: 'INSUFFICIENT_MARGIN', marginRequired } as const;
+      }
+
+      const trade = await tx.trade.create({
+        data: {
+          tenant_id: order.tenant_id,
+          user_id: order.user_id,
+          account_id: account.id,
+          instrument_id: order.instrument_id,
+          side: order.side,
+          volume: order.volume,
+          open_price: priceToInt(executionPrice, 5),
+          stop_loss: order.stop_loss,
+          take_profit: order.take_profit,
+          commission: BigInt(0),
+        },
+      });
+
+      await tx.order.updateMany({
+        where: { id: order.id, status: 'PENDING' },
+        data: { status: 'FILLED', filled_at: new Date() },
+      });
+
+      const newMarginUsedRaw = BigInt(account.margin_used) + marginRequired;
+      const newBalanceRaw = BigInt(account.balance);
+      const newEquityRaw = newBalanceRaw - newMarginUsedRaw;
+
+      // ESMA Negative Balance Protection: clamp to 0
+      const safeBalance = newBalanceRaw < 0n ? 0n : newBalanceRaw;
+      const safeMargin = newMarginUsedRaw < 0n ? 0n : newMarginUsedRaw;
+      const safeEquity = newEquityRaw < 0n ? 0n : newEquityRaw;
+
+      await tx.account.updateMany({
+        where: { id: account.id, tenant_id: order.tenant_id },
+        data: { balance: safeBalance, margin_used: safeMargin, equity: safeEquity },
+      });
+
+      return { trade } as const;
+    });
+
+    if ('skipped' in result) return;
+    if ('cancelled' in result) {
+      if (result.cancelled === 'NO_ACCOUNT') {
+        logger.warn({ orderId: order.id }, '[PositionMonitor] No account for pending order, cancelling');
+      } else {
+        logger.warn(
+          { orderId: order.id, marginRequired: (result as any).marginRequired?.toString() },
+          '[PositionMonitor] Insufficient margin for pending order, cancelling'
+        );
+      }
+      return;
+    }
+
+    logger.info({
+      orderId: order.id,
+      tradeId: result.trade.id,
+      type: order.type,
+      symbol: order.instrument.symbol,
       side: order.side,
-      volume: order.volume,
-      open_price: priceToInt(executionPrice, 5),
-      stop_loss: order.stop_loss,
-      take_profit: order.take_profit,
-      commission: BigInt(0),
-    },
-  });
-
-  // Update order
-  await prisma.order.update({
-    where: { id: order.id },
-    data: { status: 'FILLED', filled_at: new Date() },
-  });
-
-  // Update account margin
-  const newMarginUsed = BigInt(account.margin_used) + marginRequired;
-  await prisma.account.update({
-    where: { id: account.id },
-    data: { margin_used: newMarginUsed, equity: BigInt(account.balance) - newMarginUsed },
-  });
-
-  logger.info({
-    orderId: order.id,
-    tradeId: trade.id,
-    type: order.type,
-    symbol: order.instrument.symbol,
-    side: order.side,
-    executionPrice,
-  }, `[PositionMonitor] Pending ${order.type} order filled`);
+      executionPrice,
+    }, `[PositionMonitor] Pending ${order.type} order filled`);
+  } catch (err) {
+    logger.error({ err, orderId: order.id }, '[PositionMonitor] Failed to fill pending order');
+  }
 }

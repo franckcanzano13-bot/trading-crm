@@ -5,6 +5,7 @@ import { tenantResolver } from '../../shared/middleware/tenant-resolver';
 import { requireAuth } from '../../shared/middleware/auth';
 import { serializeBigInt, logger, priceToInt, calculateMarginCents } from '../../shared/utils/index';
 import { executeOrder } from './engine';
+import { prisma } from '../../shared/database/prisma';
 
 const UpdateSLTPSchema = z.object({
   stop_loss: z.number().positive().nullable().optional(),
@@ -93,6 +94,7 @@ export async function tradingRoutes(fastify: FastifyInstance) {
     preHandler: [tenantResolver, requireAuth],
   }, async (request, reply) => {
     const tq = request.tenantQuery!;
+    const tenantId = request.tenantId!;
     const trade = await tq.findTradeById(request.params.id);
 
     if (!trade || trade.status !== 'OPEN') {
@@ -114,26 +116,57 @@ export async function tradingRoutes(fastify: FastifyInstance) {
     const pnlRaw = (closePrice - openPriceFloat) * trade.volume * trade.lot_size * direction;
     const pnlCents = BigInt(Math.round(pnlRaw * 100));
 
-    const closedTrade = await tq.closeTrade(trade.id, closePriceInt, pnlCents);
+    // EXEC-001: Atomic close + balance update + transaction.
+    // The trade.update is idempotent (status='OPEN' guard) which prevents double-close races.
+    let closedTrade;
+    try {
+      closedTrade = await prisma.$transaction(async (tx) => {
+        // Idempotent close — status='OPEN' guard prevents double-close
+        const closeResult = await tx.trade.updateMany({
+          where: { id: trade.id, tenant_id: tenantId, status: 'OPEN' },
+          data: { close_price: closePriceInt, pnl: pnlCents, status: 'CLOSED', close_time: new Date() },
+        });
+        if (closeResult.count === 0) {
+          throw new Error('TRADE_ALREADY_CLOSED');
+        }
 
-    // Update account balance
-    const account = await tq.findAccountById(trade.account_id);
-    if (account) {
-      const newBalance = BigInt(account.balance) + pnlCents;
-      const marginRelease = calculateMarginCents(openPriceFloat, trade.volume, trade.lot_size, account.leverage);
-      const newMarginUsed = BigInt(account.margin_used) - marginRelease;
-      await tq.updateAccountBalance(
-        account.id,
-        newBalance,
-        newMarginUsed < BigInt(0) ? BigInt(0) : newMarginUsed,
-        newBalance
-      );
-      await tq.createTransaction({
-        account_id: account.id,
-        type: 'TRADE_PNL',
-        amount: pnlCents,
-        description: `Closed ${trade.side} ${trade.volume} ${trade.symbol} P&L`,
+        const account = await tx.account.findFirst({
+          where: { id: trade.account_id, tenant_id: tenantId },
+        });
+        if (account) {
+          const marginRelease = calculateMarginCents(openPriceFloat, trade.volume, trade.lot_size, account.leverage);
+          const newBalanceRaw = BigInt(account.balance) + pnlCents;
+          const newMarginUsedRaw = BigInt(account.margin_used) - marginRelease;
+          const newEquityRaw = newBalanceRaw;
+
+          // ESMA Negative Balance Protection: clamp to 0
+          const safeBalance = newBalanceRaw < 0n ? 0n : newBalanceRaw;
+          const safeMargin = newMarginUsedRaw < 0n ? 0n : newMarginUsedRaw;
+          const safeEquity = newEquityRaw < 0n ? 0n : newEquityRaw;
+
+          await tx.account.updateMany({
+            where: { id: account.id, tenant_id: tenantId },
+            data: { balance: safeBalance, margin_used: safeMargin, equity: safeEquity },
+          });
+
+          await tx.transaction.create({
+            data: {
+              tenant_id: tenantId,
+              account_id: account.id,
+              type: 'TRADE_PNL',
+              amount: pnlCents,
+              description: `Closed ${trade.side} ${trade.volume} ${trade.symbol} P&L`,
+            },
+          });
+        }
+
+        return tx.trade.findUnique({ where: { id: trade.id } });
       });
+    } catch (err: any) {
+      if (err?.message === 'TRADE_ALREADY_CLOSED') {
+        return reply.status(409).send({ error: 'Position already closed', code: 'ALREADY_CLOSED' });
+      }
+      throw err;
     }
 
     logger.info({ tradeId: trade.id, pnl: pnlCents.toString() }, 'Position closed');

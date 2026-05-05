@@ -1,4 +1,5 @@
 import { TenantQuery } from '../../shared/database/tenant-queries';
+import { prisma } from '../../shared/database/prisma';
 import { getCurrentPrice } from '../pricing/price-store';
 import { calculatePnlCents, calculateMarginCents, logger } from '../../shared/utils/index';
 
@@ -97,28 +98,60 @@ export async function checkAndLiquidate(
     })
     .sort((a: any, b: any) => Number(a.pnl - b.pnl)); // Worst P&L first
 
+  // Resolve tenantId from the TenantQuery instance (private field) for atomicity below
+  const tenantId = (tenantQuery as any).tenantId as string;
+
   for (const trade of tradesWithPnl) {
     const closePriceInt = BigInt(Math.round(trade.currentPrice * 100000));
-    await tenantQuery.closeTrade(trade.id, closePriceInt, trade.pnl, 'LIQUIDATED');
 
-    const account = await tenantQuery.findAccountById(accountId);
-    if (account) {
-      const newBalance = BigInt(account.balance) + trade.pnl;
-      const margin = calculateMarginCents(Number(trade.open_price) / 100000, trade.volume, trade.lot_size, account.leverage);
-      const newMarginUsed = BigInt(account.margin_used) - margin;
-      await tenantQuery.updateAccountBalance(
-        accountId,
-        newBalance,
-        newMarginUsed < BigInt(0) ? BigInt(0) : newMarginUsed,
-        newBalance
-      );
-      await tenantQuery.createTransaction({
-        account_id: accountId,
-        type: 'TRADE_PNL',
-        amount: trade.pnl,
-        description: `Liquidated ${trade.side} ${trade.volume} ${trade.symbol}`,
+    // EXEC-001: Atomic liquidation — close + balance update + transaction.
+    // Idempotent — only closes if still OPEN.
+    const didClose = await prisma.$transaction(async (tx) => {
+      const closeResult = await tx.trade.updateMany({
+        where: { id: trade.id, tenant_id: tenantId, status: 'OPEN' },
+        data: { close_price: closePriceInt, pnl: trade.pnl, status: 'LIQUIDATED', close_time: new Date() },
       });
-    }
+      if (closeResult.count === 0) {
+        return false;
+      }
+
+      const account = await tx.account.findFirst({
+        where: { id: accountId, tenant_id: tenantId },
+      });
+      if (account) {
+        const margin = calculateMarginCents(
+          Number(trade.open_price) / 100000,
+          trade.volume,
+          trade.lot_size,
+          account.leverage
+        );
+        const newBalanceRaw = BigInt(account.balance) + trade.pnl;
+        const newMarginRaw = BigInt(account.margin_used) - margin;
+
+        // ESMA Negative Balance Protection: clamp to 0
+        const safeBalance = newBalanceRaw < 0n ? 0n : newBalanceRaw;
+        const safeMargin = newMarginRaw < 0n ? 0n : newMarginRaw;
+        const safeEquity = safeBalance;
+
+        await tx.account.updateMany({
+          where: { id: account.id, tenant_id: tenantId },
+          data: { balance: safeBalance, margin_used: safeMargin, equity: safeEquity },
+        });
+
+        await tx.transaction.create({
+          data: {
+            tenant_id: tenantId,
+            account_id: accountId,
+            type: 'TRADE_PNL',
+            amount: trade.pnl,
+            description: `Liquidated ${trade.side} ${trade.volume} ${trade.symbol}`,
+          },
+        });
+      }
+      return true;
+    });
+
+    if (!didClose) continue;
 
     liquidated.push(trade.id);
     logger.info({ tradeId: trade.id, pnl: trade.pnl.toString() }, 'Position liquidated');

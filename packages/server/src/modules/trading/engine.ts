@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { TenantQuery } from '../../shared/database/tenant-queries';
+import { prisma } from '../../shared/database/prisma';
 import { priceToInt, calculateMarginCents, logger } from '../../shared/utils/index';
 import { getCurrentPrice } from '../pricing/price-store';
 import type { CreateOrderInput } from '@tradexlabel/shared';
@@ -44,7 +45,7 @@ export async function executeOrder(params: ExecuteOrderParams) {
 }
 
 async function executeMarketOrder(params: ExecuteOrderParams) {
-  const { tenantQuery, userId, account, instrument, order, executionMode } = params;
+  const { tenantId, userId, account, instrument, order, executionMode } = params;
 
   // Dealer-mode: invest_amount present + B_BOOK_DEALER tenant
   const isDealerMode = executionMode === 'B_BOOK_DEALER' && order.invest_amount && order.invest_amount > 0;
@@ -70,41 +71,70 @@ async function executeMarketOrder(params: ExecuteOrderParams) {
 
   // Calculate required margin
   const marginRequired = calculateMarginCents(finalPrice, order.volume, instrument.lot_size, account.leverage);
-  const availableMargin = BigInt(account.balance) - BigInt(account.margin_used);
-
-  if (marginRequired > availableMargin) {
-    throw new Error('Insufficient margin');
-  }
-
+  const finalPriceInt = priceToInt(finalPrice, 5);
   const commissionCents = BigInt(0);
 
-  const trade = await tenantQuery.createTrade({
-    user_id: userId,
-    account_id: account.id,
-    instrument_id: instrument.id,
-    side: order.side,
-    volume: order.volume,
-    open_price: priceToInt(finalPrice, 5),
-    stop_loss: order.stop_loss,
-    take_profit: order.take_profit,
-    commission: commissionCents,
-  });
+  // EXEC-001: Atomic — all or nothing. Re-reads account inside tx to avoid TOCTOU.
+  const { trade, filledOrder } = await prisma.$transaction(async (tx) => {
+    const freshAccount = await tx.account.findFirst({
+      where: { id: account.id, tenant_id: tenantId },
+    });
+    if (!freshAccount) {
+      throw new Error('Account not found');
+    }
 
-  const newMarginUsed = BigInt(account.margin_used) + marginRequired;
-  const newEquity = BigInt(account.balance) - commissionCents;
-  await tenantQuery.updateAccountBalance(account.id, BigInt(account.balance) - commissionCents, newMarginUsed, newEquity);
+    const availableMargin = BigInt(freshAccount.balance) - BigInt(freshAccount.margin_used);
+    if (marginRequired > availableMargin) {
+      throw new Error('Insufficient margin');
+    }
 
-  const filledOrder = await tenantQuery.createOrder({
-    user_id: userId,
-    instrument_id: instrument.id,
-    type: 'MARKET',
-    side: order.side,
-    volume: order.volume,
-    price: priceToInt(finalPrice, 5),
-    stop_loss: order.stop_loss,
-    take_profit: order.take_profit,
+    const newTrade = await tx.trade.create({
+      data: {
+        tenant_id: tenantId,
+        user_id: userId,
+        account_id: freshAccount.id,
+        instrument_id: instrument.id,
+        side: order.side,
+        volume: order.volume,
+        open_price: finalPriceInt,
+        stop_loss: order.stop_loss ?? null,
+        take_profit: order.take_profit ?? null,
+        commission: commissionCents,
+      },
+    });
+
+    const newBalanceRaw = BigInt(freshAccount.balance) - commissionCents;
+    const newMarginUsedRaw = BigInt(freshAccount.margin_used) + marginRequired;
+    const newEquityRaw = newBalanceRaw;
+
+    // ESMA Negative Balance Protection: clamp to 0
+    const safeBalance = newBalanceRaw < 0n ? 0n : newBalanceRaw;
+    const safeMargin = newMarginUsedRaw < 0n ? 0n : newMarginUsedRaw;
+    const safeEquity = newEquityRaw < 0n ? 0n : newEquityRaw;
+
+    await tx.account.updateMany({
+      where: { id: freshAccount.id, tenant_id: tenantId },
+      data: { balance: safeBalance, margin_used: safeMargin, equity: safeEquity },
+    });
+
+    const newOrder = await tx.order.create({
+      data: {
+        tenant_id: tenantId,
+        user_id: userId,
+        instrument_id: instrument.id,
+        type: 'MARKET',
+        side: order.side,
+        volume: order.volume,
+        price: finalPriceInt,
+        stop_loss: order.stop_loss ?? null,
+        take_profit: order.take_profit ?? null,
+        status: 'FILLED',
+        filled_at: new Date(),
+      },
+    });
+
+    return { trade: newTrade, filledOrder: newOrder };
   });
-  await tenantQuery.updateOrderStatus(filledOrder.id, 'FILLED');
 
   logger.info({
     tradeId: trade.id,
@@ -126,14 +156,9 @@ async function executeMarketOrder(params: ExecuteOrderParams) {
  * - Correct decimal precision per instrument type
  */
 async function executeDealerMarketOrder(params: ExecuteOrderParams, price: { bid: number; ask: number }) {
-  const { tenantQuery, userId, account, instrument, order } = params;
+  const { tenantId, userId, account, instrument, order } = params;
 
   const investCents = BigInt(Math.round(order.invest_amount!));
-  const availableBalance = BigInt(account.balance) - BigInt(account.margin_used);
-
-  if (investCents > availableBalance) {
-    throw new Error('Insufficient balance for this investment');
-  }
 
   // Mid price: no spread bias for simulation
   const midPrice = (price.bid + price.ask) / 2;
@@ -142,31 +167,67 @@ async function executeDealerMarketOrder(params: ExecuteOrderParams, price: { bid
   }
 
   // Always store prices with precision 5 for consistency
-  const trade = await tenantQuery.createTrade({
-    user_id: userId,
-    account_id: account.id,
-    instrument_id: instrument.id,
-    side: order.side,
-    volume: order.volume,
-    open_price: priceToInt(midPrice, 5),
-    commission: BigInt(0),
-    swap: investCents, // store invest_amount for client display + simulation
-  });
+  const midPriceInt = priceToInt(midPrice, 5);
 
-  // Hold invest_amount as margin
-  const newMarginUsed = BigInt(account.margin_used) + investCents;
-  const newEquity = BigInt(account.balance) - newMarginUsed;
-  await tenantQuery.updateAccountBalance(account.id, BigInt(account.balance), newMarginUsed, newEquity);
+  // EXEC-001: Atomic — all or nothing. Re-reads account inside tx to avoid TOCTOU.
+  const { trade, filledOrder } = await prisma.$transaction(async (tx) => {
+    const freshAccount = await tx.account.findFirst({
+      where: { id: account.id, tenant_id: tenantId },
+    });
+    if (!freshAccount) {
+      throw new Error('Account not found');
+    }
 
-  const filledOrder = await tenantQuery.createOrder({
-    user_id: userId,
-    instrument_id: instrument.id,
-    type: 'MARKET',
-    side: order.side,
-    volume: order.volume,
-    price: priceToInt(midPrice, 5),
+    const availableBalance = BigInt(freshAccount.balance) - BigInt(freshAccount.margin_used);
+    if (investCents > availableBalance) {
+      throw new Error('Insufficient balance for this investment');
+    }
+
+    const newTrade = await tx.trade.create({
+      data: {
+        tenant_id: tenantId,
+        user_id: userId,
+        account_id: freshAccount.id,
+        instrument_id: instrument.id,
+        side: order.side,
+        volume: order.volume,
+        open_price: midPriceInt,
+        commission: BigInt(0),
+        swap: investCents, // store invest_amount for client display + simulation
+      },
+    });
+
+    // Hold invest_amount as margin
+    const newMarginUsedRaw = BigInt(freshAccount.margin_used) + investCents;
+    const newBalanceRaw = BigInt(freshAccount.balance);
+    const newEquityRaw = newBalanceRaw - newMarginUsedRaw;
+
+    // ESMA Negative Balance Protection: clamp to 0
+    const safeBalance = newBalanceRaw < 0n ? 0n : newBalanceRaw;
+    const safeMargin = newMarginUsedRaw < 0n ? 0n : newMarginUsedRaw;
+    const safeEquity = newEquityRaw < 0n ? 0n : newEquityRaw;
+
+    await tx.account.updateMany({
+      where: { id: freshAccount.id, tenant_id: tenantId },
+      data: { balance: safeBalance, margin_used: safeMargin, equity: safeEquity },
+    });
+
+    const newOrder = await tx.order.create({
+      data: {
+        tenant_id: tenantId,
+        user_id: userId,
+        instrument_id: instrument.id,
+        type: 'MARKET',
+        side: order.side,
+        volume: order.volume,
+        price: midPriceInt,
+        status: 'FILLED',
+        filled_at: new Date(),
+      },
+    });
+
+    return { trade: newTrade, filledOrder: newOrder };
   });
-  await tenantQuery.updateOrderStatus(filledOrder.id, 'FILLED');
 
   logger.info({
     tradeId: trade.id,

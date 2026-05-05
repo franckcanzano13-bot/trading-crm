@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { tenantResolver } from '../../shared/middleware/tenant-resolver';
 import { requireAdmin } from '../../shared/middleware/auth';
 import { serializeBigInt } from '../../shared/utils/index';
+import { prisma } from '../../shared/database/prisma';
 
 const UpdateClientSchema = z.object({
   status: z.enum(['ACTIVE', 'INACTIVE', 'BLOCKED']).optional(),
@@ -76,19 +77,48 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
     }
 
     const amountCents = BigInt(Math.round(amount * 100));
-    const account = await request.tenantQuery!.findAccountById(request.params.id);
-    if (!account) {
-      return reply.status(404).send({ error: 'Account not found', code: 'ACCOUNT_NOT_FOUND' });
-    }
+    const tenantId = request.tenantId!;
+    const accountId = request.params.id;
 
-    const newBalance = BigInt(account.balance) + amountCents;
-    await request.tenantQuery!.updateAccountBalance(account.id, newBalance, BigInt(account.margin_used), newBalance);
-    await request.tenantQuery!.createTransaction({
-      account_id: account.id,
-      type: 'DEPOSIT',
-      amount: amountCents,
-      description: description || 'Manual deposit',
-    });
+    // EXEC-001: Atomic deposit — re-reads account inside tx to avoid TOCTOU.
+    let newBalance: bigint;
+    try {
+      newBalance = await prisma.$transaction(async (tx) => {
+        const account = await tx.account.findFirst({
+          where: { id: accountId, tenant_id: tenantId },
+        });
+        if (!account) {
+          throw new Error('ACCOUNT_NOT_FOUND');
+        }
+
+        const balanceRaw = BigInt(account.balance) + amountCents;
+        // ESMA Negative Balance Protection: clamp to 0
+        const safeBalance = balanceRaw < 0n ? 0n : balanceRaw;
+        const safeEquity = safeBalance;
+
+        await tx.account.updateMany({
+          where: { id: account.id, tenant_id: tenantId },
+          data: { balance: safeBalance, margin_used: BigInt(account.margin_used), equity: safeEquity },
+        });
+
+        await tx.transaction.create({
+          data: {
+            tenant_id: tenantId,
+            account_id: account.id,
+            type: 'DEPOSIT',
+            amount: amountCents,
+            description: description || 'Manual deposit',
+          },
+        });
+
+        return safeBalance;
+      });
+    } catch (err: any) {
+      if (err?.message === 'ACCOUNT_NOT_FOUND') {
+        return reply.status(404).send({ error: 'Account not found', code: 'ACCOUNT_NOT_FOUND' });
+      }
+      throw err;
+    }
 
     return reply.send({ data: { balance: newBalance.toString() } });
   });
@@ -103,24 +133,56 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
     }
 
     const amountCents = BigInt(Math.round(amount * 100));
-    const account = await request.tenantQuery!.findAccountById(request.params.id);
-    if (!account) {
-      return reply.status(404).send({ error: 'Account not found', code: 'ACCOUNT_NOT_FOUND' });
-    }
+    const tenantId = request.tenantId!;
+    const accountId = request.params.id;
 
-    const currentBalance = BigInt(account.balance);
-    if (amountCents > currentBalance) {
-      return reply.status(400).send({ error: 'Insufficient balance', code: 'INSUFFICIENT_BALANCE' });
-    }
+    // EXEC-001: Atomic withdraw — re-reads account inside tx and re-checks balance.
+    let newBalance: bigint;
+    try {
+      newBalance = await prisma.$transaction(async (tx) => {
+        const account = await tx.account.findFirst({
+          where: { id: accountId, tenant_id: tenantId },
+        });
+        if (!account) {
+          throw new Error('ACCOUNT_NOT_FOUND');
+        }
 
-    const newBalance = currentBalance - amountCents;
-    await request.tenantQuery!.updateAccountBalance(account.id, newBalance, BigInt(account.margin_used), newBalance);
-    await request.tenantQuery!.createTransaction({
-      account_id: account.id,
-      type: 'WITHDRAWAL',
-      amount: -amountCents,
-      description: description || 'Manual withdrawal',
-    });
+        const currentBalance = BigInt(account.balance);
+        if (amountCents > currentBalance) {
+          throw new Error('INSUFFICIENT_BALANCE');
+        }
+
+        const balanceRaw = currentBalance - amountCents;
+        // ESMA Negative Balance Protection: clamp to 0
+        const safeBalance = balanceRaw < 0n ? 0n : balanceRaw;
+        const safeEquity = safeBalance;
+
+        await tx.account.updateMany({
+          where: { id: account.id, tenant_id: tenantId },
+          data: { balance: safeBalance, margin_used: BigInt(account.margin_used), equity: safeEquity },
+        });
+
+        await tx.transaction.create({
+          data: {
+            tenant_id: tenantId,
+            account_id: account.id,
+            type: 'WITHDRAWAL',
+            amount: -amountCents,
+            description: description || 'Manual withdrawal',
+          },
+        });
+
+        return safeBalance;
+      });
+    } catch (err: any) {
+      if (err?.message === 'ACCOUNT_NOT_FOUND') {
+        return reply.status(404).send({ error: 'Account not found', code: 'ACCOUNT_NOT_FOUND' });
+      }
+      if (err?.message === 'INSUFFICIENT_BALANCE') {
+        return reply.status(400).send({ error: 'Insufficient balance', code: 'INSUFFICIENT_BALANCE' });
+      }
+      throw err;
+    }
 
     return reply.send({ data: { balance: newBalance.toString() } });
   });

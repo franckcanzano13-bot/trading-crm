@@ -53,35 +53,68 @@ async function closeDealerTrade(tenantId: string, tradeId: string) {
     ? (side === 'BUY' ? livePrice.bid : livePrice.ask)
     : Number(trade.open_price) / Math.pow(10, closeDecimals);
   const closePriceCents = priceToInt(closePriceFloat, closeDecimals);
-
-  await tq.closeTrade(tradeId, closePriceCents, targetPnlCents, 'CLOSED');
-
-  // Update account balance
   const investCents = BigInt(trade.swap || 0);
-  const account = await tq.findAccountById(trade.account_id);
-  if (account) {
-    const releasedMargin = BigInt(account.margin_used) - investCents;
-    const newBalance = BigInt(account.balance) + targetPnlCents;
-    const finalMargin = releasedMargin < 0n ? 0n : releasedMargin;
-    const newEquity = newBalance - finalMargin;
-    await tq.updateAccountBalance(account.id, newBalance, finalMargin, newEquity);
+
+  // EXEC-001: Atomic close + balance update + transaction + intervention.
+  // Idempotent — only closes if still OPEN (prevents double-close races between
+  // in-memory setTimeout and the periodic checker).
+  const closed = await prisma.$transaction(async (tx) => {
+    const closeResult = await tx.trade.updateMany({
+      where: { id: tradeId, tenant_id: tenantId, status: 'OPEN' },
+      data: { close_price: closePriceCents, pnl: targetPnlCents, status: 'CLOSED', close_time: new Date() },
+    });
+    if (closeResult.count === 0) {
+      return false;
+    }
+
+    const account = await tx.account.findFirst({
+      where: { id: trade.account_id, tenant_id: tenantId },
+    });
+    if (account) {
+      const releasedMargin = BigInt(account.margin_used) - investCents;
+      const newBalanceRaw = BigInt(account.balance) + targetPnlCents;
+      const finalMargin = releasedMargin < 0n ? 0n : releasedMargin;
+      const newEquityRaw = newBalanceRaw - finalMargin;
+
+      // ESMA Negative Balance Protection: clamp to 0
+      const safeBalance = newBalanceRaw < 0n ? 0n : newBalanceRaw;
+      const safeEquity = newEquityRaw < 0n ? 0n : newEquityRaw;
+
+      await tx.account.updateMany({
+        where: { id: account.id, tenant_id: tenantId },
+        data: { balance: safeBalance, margin_used: finalMargin, equity: safeEquity },
+      });
+    }
+
+    await tx.transaction.create({
+      data: {
+        tenant_id: tenantId,
+        account_id: trade.account_id,
+        type: targetPnlCents >= 0n ? 'TRADE_PROFIT' : 'TRADE_LOSS',
+        amount: targetPnlCents < 0n ? -targetPnlCents : targetPnlCents,
+        description: `Dealer trade ${symbol} ${side} ${trade.volume} lot — P&L: $${(Number(targetPnlCents) / 100).toFixed(2)}`,
+      },
+    });
+
+    await tx.dealerIntervention.create({
+      data: {
+        tenant_id: tenantId,
+        trade_id: tradeId,
+        dealer_id: 'system',
+        action: 'PNL_OVERRIDE',
+        original_price: trade.open_price,
+        modified_price: closePriceCents,
+        reason: `Scheduled auto-close — target P&L: $${(Number(targetPnlCents) / 100).toFixed(2)}`,
+      },
+    });
+
+    return true;
+  });
+
+  if (!closed) {
+    logger.warn({ tradeId }, 'Scheduled close skipped — already closed by another worker');
+    return;
   }
-
-  await tq.createTransaction({
-    account_id: trade.account_id,
-    type: targetPnlCents >= 0n ? 'TRADE_PROFIT' : 'TRADE_LOSS',
-    amount: targetPnlCents < 0n ? -targetPnlCents : targetPnlCents,
-    description: `Dealer trade ${symbol} ${side} ${trade.volume} lot — P&L: $${(Number(targetPnlCents) / 100).toFixed(2)}`,
-  });
-
-  await tq.createDealerIntervention({
-    trade_id: tradeId,
-    dealer_id: 'system',
-    action: 'PNL_OVERRIDE',
-    original_price: trade.open_price,
-    modified_price: closePriceCents,
-    reason: `Scheduled auto-close — target P&L: $${(Number(targetPnlCents) / 100).toFixed(2)}`,
-  });
 
   logger.info({ tradeId, pnl: Number(targetPnlCents) }, 'Scheduled trade closed successfully');
 }
@@ -215,39 +248,85 @@ export async function dealerRoutes(fastify: FastifyInstance) {
       ? BigInt(Math.round(body.pnl_target))
       : undefined;
 
-    const trade = await tq.createTrade({
-      user_id: body.user_id,
-      account_id: account.id,
-      instrument_id: instrument.id,
-      side: body.side,
-      volume: body.volume,
-      open_price: openPriceCents,
-      commission: BigInt(Math.floor(body.volume * 700)),
-      swap: investCents, // store invest_amount for client display
-      pnl_target: targetPnlCents,
-      scheduled_close_at: scheduledCloseAt,
-    });
+    // EXEC-001: Atomic — createTrade + reserve margin + record intervention.
+    // Re-reads account inside tx to avoid TOCTOU on the balance check.
+    const tenantId = request.tenantId!;
+    let trade;
+    try {
+      trade = await prisma.$transaction(async (tx) => {
+        const freshAccount = await tx.account.findFirst({
+          where: { id: account.id, tenant_id: tenantId },
+        });
+        if (!freshAccount) {
+          throw new Error('ACCOUNT_NOT_FOUND');
+        }
 
-    // Update margin if invest_amount provided
-    if (investCents > 0) {
-      const newMargin = BigInt(account.margin_used) + investCents;
-      const newEquity = BigInt(account.balance) - newMargin;
-      await tq.updateAccountBalance(account.id, BigInt(account.balance), newMargin, newEquity);
+        if (investCents > 0n) {
+          const freshAvailable = BigInt(freshAccount.balance) - BigInt(freshAccount.margin_used);
+          if (investCents > freshAvailable) {
+            throw new Error('INSUFFICIENT_BALANCE');
+          }
+        }
+
+        const newTrade = await tx.trade.create({
+          data: {
+            tenant_id: tenantId,
+            user_id: body.user_id,
+            account_id: freshAccount.id,
+            instrument_id: instrument.id,
+            side: body.side,
+            volume: body.volume,
+            open_price: openPriceCents,
+            commission: BigInt(Math.floor(body.volume * 700)),
+            swap: investCents,
+            pnl_target: targetPnlCents ?? null,
+            scheduled_close_at: scheduledCloseAt ?? null,
+          },
+        });
+
+        if (investCents > 0n) {
+          const newMarginRaw = BigInt(freshAccount.margin_used) + investCents;
+          const newBalanceRaw = BigInt(freshAccount.balance);
+          const newEquityRaw = newBalanceRaw - newMarginRaw;
+
+          // ESMA Negative Balance Protection: clamp to 0
+          const safeBalance = newBalanceRaw < 0n ? 0n : newBalanceRaw;
+          const safeMargin = newMarginRaw < 0n ? 0n : newMarginRaw;
+          const safeEquity = newEquityRaw < 0n ? 0n : newEquityRaw;
+
+          await tx.account.updateMany({
+            where: { id: freshAccount.id, tenant_id: tenantId },
+            data: { balance: safeBalance, margin_used: safeMargin, equity: safeEquity },
+          });
+        }
+
+        await tx.dealerIntervention.create({
+          data: {
+            tenant_id: tenantId,
+            trade_id: newTrade.id,
+            dealer_id: request.userData!.sub,
+            action: 'TRADE_CREATE',
+            original_price: openPriceCents,
+            reason: `${body.reason}${investCents > 0n ? ` | Invest: $${(Number(investCents) / 100).toFixed(2)}` : ''}`,
+          },
+        });
+
+        return newTrade;
+      });
+    } catch (err: any) {
+      if (err?.message === 'ACCOUNT_NOT_FOUND') {
+        return reply.status(404).send({ error: 'Account not found', code: 'ACCOUNT_NOT_FOUND' });
+      }
+      if (err?.message === 'INSUFFICIENT_BALANCE') {
+        return reply.status(400).send({ error: 'Insufficient available balance', code: 'INSUFFICIENT_BALANCE' });
+      }
+      throw err;
     }
-
-    await tq.createDealerIntervention({
-      trade_id: trade.id,
-      dealer_id: request.userData!.sub,
-      action: 'TRADE_CREATE',
-      original_price: openPriceCents,
-      reason: `${body.reason}${investCents > 0 ? ` | Invest: $${(Number(investCents) / 100).toFixed(2)}` : ''}`,
-    });
 
     // If pnl_target is set with a delay, schedule in-memory timer (+ persistent DB check as backup)
     if (hasScheduledClose) {
       const delayMs = body.close_after_seconds! * 1000;
       const tradeId = trade.id;
-      const tenantId = request.tenantId!;
 
       logger.info({
         tradeId, delayMs, targetPnl: body.pnl_target, invest: Number(investCents),
@@ -268,26 +347,54 @@ export async function dealerRoutes(fastify: FastifyInstance) {
     // If pnl_target is set WITHOUT delay, close immediately
     if (body.pnl_target !== undefined && body.pnl_target !== null) {
       const pnlCents = BigInt(Math.round(body.pnl_target));
-      await tq.closeTrade(trade.id, openPriceCents, pnlCents, 'CLOSED');
 
-      const currentMargin = investCents > 0
-        ? BigInt(account.margin_used) + investCents
-        : BigInt(account.margin_used);
-      const releasedMargin = currentMargin - investCents;
-      const newBalance = BigInt(account.balance) + pnlCents;
-      const newEquity = newBalance - releasedMargin;
-      await tq.updateAccountBalance(account.id, newBalance, releasedMargin, newEquity);
+      // EXEC-001: Atomic — close trade + release margin + record transaction.
+      const closedTrade = await prisma.$transaction(async (tx) => {
+        const closeResult = await tx.trade.updateMany({
+          where: { id: trade.id, tenant_id: tenantId, status: 'OPEN' },
+          data: { close_price: openPriceCents, pnl: pnlCents, status: 'CLOSED', close_time: new Date() },
+        });
+        if (closeResult.count === 0) {
+          throw new Error('TRADE_ALREADY_CLOSED');
+        }
 
-      await tq.createTransaction({
-        account_id: account.id,
-        type: pnlCents >= 0 ? 'TRADE_PROFIT' : 'TRADE_LOSS',
-        amount: pnlCents < 0 ? -pnlCents : pnlCents,
-        description: `Dealer trade ${body.symbol} ${body.side} ${body.volume} lot — P&L: $${(Number(pnlCents) / 100).toFixed(2)}${investCents > 0 ? ` | Invest: $${(Number(investCents) / 100).toFixed(2)}` : ''}`,
+        // Re-read account inside tx — margin reservation just happened, but we want
+        // a fresh view in case anything else modified balance concurrently.
+        const freshAccount = await tx.account.findFirst({
+          where: { id: account.id, tenant_id: tenantId },
+        });
+        if (freshAccount) {
+          // Release the invest_amount margin we just reserved (if any), and apply pnl
+          const newMarginRaw = BigInt(freshAccount.margin_used) - investCents;
+          const newBalanceRaw = BigInt(freshAccount.balance) + pnlCents;
+          const finalMargin = newMarginRaw < 0n ? 0n : newMarginRaw;
+          const newEquityRaw = newBalanceRaw - finalMargin;
+
+          // ESMA Negative Balance Protection: clamp to 0
+          const safeBalance = newBalanceRaw < 0n ? 0n : newBalanceRaw;
+          const safeEquity = newEquityRaw < 0n ? 0n : newEquityRaw;
+
+          await tx.account.updateMany({
+            where: { id: freshAccount.id, tenant_id: tenantId },
+            data: { balance: safeBalance, margin_used: finalMargin, equity: safeEquity },
+          });
+        }
+
+        await tx.transaction.create({
+          data: {
+            tenant_id: tenantId,
+            account_id: account.id,
+            type: pnlCents >= 0n ? 'TRADE_PROFIT' : 'TRADE_LOSS',
+            amount: pnlCents < 0n ? -pnlCents : pnlCents,
+            description: `Dealer trade ${body.symbol} ${body.side} ${body.volume} lot — P&L: $${(Number(pnlCents) / 100).toFixed(2)}${investCents > 0n ? ` | Invest: $${(Number(investCents) / 100).toFixed(2)}` : ''}`,
+          },
+        });
+
+        return tx.trade.findUnique({ where: { id: trade.id } });
       });
 
       logger.info({ tradeId: trade.id, pnl: body.pnl_target, invest: Number(investCents), dealerId: request.userData!.sub }, 'Dealer created & closed trade (instant)');
 
-      const closedTrade = await tq.findTradeById(trade.id);
       return reply.status(201).send({ data: serializeBigInt(closedTrade || trade) });
     }
 
@@ -315,24 +422,56 @@ export async function dealerRoutes(fastify: FastifyInstance) {
     const closePriceCents = body.close_price
       ? priceToInt(body.close_price, trade.pip_size < 0.001 ? 5 : 2)
       : trade.open_price;
+    const tenantId = request.tenantId!;
 
-    await tq.closeTrade(trade.id, closePriceCents, pnlCents, 'CLOSED');
+    // EXEC-001: Atomic close + balance update + intervention.
+    // Idempotent — only closes if still OPEN (prevents double-close races).
+    try {
+      await prisma.$transaction(async (tx) => {
+        const closeResult = await tx.trade.updateMany({
+          where: { id: trade.id, tenant_id: tenantId, status: 'OPEN' },
+          data: { close_price: closePriceCents, pnl: pnlCents, status: 'CLOSED', close_time: new Date() },
+        });
+        if (closeResult.count === 0) {
+          throw new Error('TRADE_ALREADY_CLOSED');
+        }
 
-    const account = await tq.findAccountById(trade.account_id);
-    if (account) {
-      const newBalance = BigInt(account.balance) + pnlCents;
-      const newEquity = newBalance - BigInt(account.margin_used);
-      await tq.updateAccountBalance(account.id, newBalance, BigInt(account.margin_used), newEquity);
+        const account = await tx.account.findFirst({
+          where: { id: trade.account_id, tenant_id: tenantId },
+        });
+        if (account) {
+          const newBalanceRaw = BigInt(account.balance) + pnlCents;
+          const newEquityRaw = newBalanceRaw - BigInt(account.margin_used);
+
+          // ESMA Negative Balance Protection: clamp to 0
+          const safeBalance = newBalanceRaw < 0n ? 0n : newBalanceRaw;
+          const safeMargin = BigInt(account.margin_used) < 0n ? 0n : BigInt(account.margin_used);
+          const safeEquity = newEquityRaw < 0n ? 0n : newEquityRaw;
+
+          await tx.account.updateMany({
+            where: { id: account.id, tenant_id: tenantId },
+            data: { balance: safeBalance, margin_used: safeMargin, equity: safeEquity },
+          });
+        }
+
+        await tx.dealerIntervention.create({
+          data: {
+            tenant_id: tenantId,
+            trade_id: trade.id,
+            dealer_id: request.userData!.sub,
+            action: 'PNL_OVERRIDE',
+            original_price: trade.open_price,
+            modified_price: closePriceCents,
+            reason: body.reason,
+          },
+        });
+      });
+    } catch (err: any) {
+      if (err?.message === 'TRADE_ALREADY_CLOSED') {
+        return reply.status(409).send({ error: 'Trade already closed', code: 'ALREADY_CLOSED' });
+      }
+      throw err;
     }
-
-    await tq.createDealerIntervention({
-      trade_id: trade.id,
-      dealer_id: request.userData!.sub,
-      action: 'PNL_OVERRIDE',
-      original_price: trade.open_price,
-      modified_price: closePriceCents,
-      reason: body.reason,
-    });
 
     logger.info({ tradeId: trade.id, pnl: body.pnl, dealerId: request.userData!.sub }, 'Dealer closed trade');
 

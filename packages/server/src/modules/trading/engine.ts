@@ -3,6 +3,7 @@ import { TenantQuery } from '../../shared/database/tenant-queries';
 import { prisma } from '../../shared/database/prisma';
 import { priceToInt, calculateMarginCents, logger } from '../../shared/utils/index';
 import { getCurrentPrice } from '../pricing/price-store';
+import { clampLeverage } from '../../shared/compliance/leverage-caps';
 import type { CreateOrderInput } from '@tradexlabel/shared';
 
 export interface ExecuteOrderParams {
@@ -69,8 +70,25 @@ async function executeMarketOrder(params: ExecuteOrderParams) {
     ? executionPrice + spreadMarkup / 2
     : executionPrice - spreadMarkup / 2;
 
-  // Calculate required margin
-  const marginRequired = calculateMarginCents(finalPrice, order.volume, instrument.lot_size, account.leverage);
+  // Sprint 2.5: ESMA / FCA / ASIC leverage cap by client jurisdiction × instrument
+  const user = await prisma.user.findFirst({ where: { id: userId, tenant_id: tenantId }, select: { country: true } });
+  const leverageCheck = clampLeverage(
+    user?.country || '',
+    instrument.symbol,
+    instrument.type,
+    account.leverage,
+  );
+  if (leverageCheck.capped) {
+    logger.warn({
+      userId, country: user?.country, symbol: instrument.symbol,
+      requested: account.leverage, capped_to: leverageCheck.effective,
+      jurisdiction: leverageCheck.jurisdiction,
+    }, '[ESMA] leverage capped by jurisdiction');
+  }
+  const effectiveLeverage = leverageCheck.effective;
+
+  // Calculate required margin (with capped leverage)
+  const marginRequired = calculateMarginCents(finalPrice, order.volume, instrument.lot_size, effectiveLeverage);
   const finalPriceInt = priceToInt(finalPrice, 5);
   const commissionCents = BigInt(0);
 

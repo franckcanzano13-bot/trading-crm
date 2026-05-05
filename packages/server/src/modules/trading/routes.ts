@@ -67,12 +67,13 @@ export async function tradingRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // Cancel pending order
+  // Cancel pending order — VULN-003 fix: scope to user_id to prevent IDOR
   fastify.delete<{ Params: { id: string } }>('/api/v1/orders/:id', {
     preHandler: [tenantResolver, requireAuth],
   }, async (request, reply) => {
     const tq = request.tenantQuery!;
-    const order = await tq.updateOrderStatus(request.params.id, 'CANCELLED');
+    const userId = request.userData!.sub;
+    const order = await tq.updateOrderStatus(request.params.id, 'CANCELLED', userId);
     if (!order) {
       return reply.status(404).send({ error: 'Order not found', code: 'ORDER_NOT_FOUND' });
     }

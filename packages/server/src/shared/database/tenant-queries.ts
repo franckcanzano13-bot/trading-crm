@@ -35,14 +35,17 @@ export class TenantQuery {
   }
 
   async updateUser(id: string, data: { status?: string; kyc_status?: string; name?: string }) {
-    return prisma.user.update({
-      where: { id },
+    // VULN tenant_id filter: ensure update is scoped to current tenant
+    const result = await prisma.user.updateMany({
+      where: { id, tenant_id: this.tenantId },
       data: {
         ...(data.status && { status: data.status }),
         ...(data.kyc_status && { kyc_status: data.kyc_status }),
         ...(data.name && { name: data.name }),
       },
     });
+    if (result.count === 0) return null;
+    return prisma.user.findUnique({ where: { id } });
   }
 
   // ─── Accounts ───
@@ -61,10 +64,16 @@ export class TenantQuery {
   }
 
   async updateAccountBalance(accountId: string, balance: bigint, marginUsed: bigint, equity: bigint) {
-    return prisma.account.update({
-      where: { id: accountId },
-      data: { balance, margin_used: marginUsed, equity },
+    // ESMA Negative Balance Protection: clamp balance and equity to 0
+    const safeBalance = balance < BigInt(0) ? BigInt(0) : balance;
+    const safeEquity = equity < BigInt(0) ? BigInt(0) : equity;
+    const safeMargin = marginUsed < BigInt(0) ? BigInt(0) : marginUsed;
+    const result = await prisma.account.updateMany({
+      where: { id: accountId, tenant_id: this.tenantId },
+      data: { balance: safeBalance, margin_used: safeMargin, equity: safeEquity },
     });
+    if (result.count === 0) return null;
+    return prisma.account.findUnique({ where: { id: accountId } });
   }
 
   // ─── Instruments ───
@@ -102,8 +111,8 @@ export class TenantQuery {
   }
 
   async updateInstrument(id: string, data: { spread_markup?: number; is_active?: boolean; min_volume?: number; max_volume?: number }) {
-    return prisma.instrument.update({
-      where: { id },
+    const result = await prisma.instrument.updateMany({
+      where: { id, tenant_id: this.tenantId },
       data: {
         ...(data.spread_markup !== undefined && { spread_markup: data.spread_markup }),
         ...(data.is_active !== undefined && { is_active: data.is_active }),
@@ -111,6 +120,8 @@ export class TenantQuery {
         ...(data.max_volume !== undefined && { max_volume: data.max_volume }),
       },
     });
+    if (result.count === 0) return null;
+    return prisma.instrument.findUnique({ where: { id } });
   }
 
   // ─── Trades ───
@@ -177,17 +188,22 @@ export class TenantQuery {
   }
 
   async updateTradeSLTP(id: string, stopLoss: number | null, takeProfit: number | null) {
-    return prisma.trade.update({
-      where: { id },
+    const result = await prisma.trade.updateMany({
+      where: { id, tenant_id: this.tenantId },
       data: { stop_loss: stopLoss, take_profit: takeProfit },
     });
+    if (result.count === 0) return null;
+    return prisma.trade.findUnique({ where: { id } });
   }
 
   async closeTrade(id: string, closePrice: bigint, pnl: bigint, status = 'CLOSED') {
-    return prisma.trade.update({
-      where: { id },
+    // Idempotent close: only updates if still OPEN — prevents double-close races
+    const result = await prisma.trade.updateMany({
+      where: { id, tenant_id: this.tenantId, status: 'OPEN' },
       data: { close_price: closePrice, pnl, status, close_time: new Date() },
     });
+    if (result.count === 0) return null;
+    return prisma.trade.findUnique({ where: { id } });
   }
 
   async findTradeById(id: string) {
@@ -246,11 +262,19 @@ export class TenantQuery {
     });
   }
 
-  async updateOrderStatus(id: string, status: string) {
-    return prisma.order.update({
-      where: { id },
+  /**
+   * Update order status.
+   * @param id Order ID
+   * @param status New status
+   * @param userId Optional: also enforce ownership (prevents IDOR — VULN-003)
+   */
+  async updateOrderStatus(id: string, status: string, userId?: string) {
+    const result = await prisma.order.updateMany({
+      where: { id, tenant_id: this.tenantId, ...(userId && { user_id: userId }) },
       data: { status, ...(status === 'FILLED' && { filled_at: new Date() }) },
     });
+    if (result.count === 0) return null;
+    return prisma.order.findUnique({ where: { id } });
   }
 
   // ─── Transactions ───

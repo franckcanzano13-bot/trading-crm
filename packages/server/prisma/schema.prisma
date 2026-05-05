@@ -33,6 +33,9 @@ model TenantAdmin {
   name          String
   role          String   @default("admin")
   is_active     Boolean  @default(true)
+  // Sprint 2.8: TOTP 2FA — base32 secret stored encrypted via shared/crypto.encrypt()
+  totp_secret   String   @default("")
+  totp_enabled  Boolean  @default(false)
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
 

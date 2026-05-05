@@ -308,7 +308,9 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
       rateLimit: { max: 5, timeWindow: '15 minutes' },
     },
   }, async (request, reply) => {
-    const { email, password, tenant_id } = request.body as { email: string; password: string; tenant_id: string };
+    const { email, password, tenant_id, code } = request.body as {
+      email: string; password: string; tenant_id: string; code?: string;
+    };
 
     if (!email || !password || !tenant_id) {
       return reply.status(400).send({ error: 'Missing fields', code: 'VALIDATION_ERROR' });
@@ -332,6 +334,25 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
       return reply.status(401).send({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
     }
 
+    // Sprint 2.8: TOTP 2FA gate. If the admin enrolled, password alone is not enough.
+    if (admin.totp_enabled && admin.totp_secret) {
+      if (!code) {
+        // Password is correct, but we need a TOTP code. Tell the client to prompt.
+        return reply.status(200).send({ data: { requires_2fa: true } });
+      }
+      const { authenticator } = await import('otplib');
+      const { decrypt } = await import('../../shared/crypto');
+      const secret = decrypt(admin.totp_secret);
+      const codeOk = secret ? authenticator.verify({ token: code, secret }) : false;
+      if (!codeOk) {
+        await audit.log({
+          tenantId: admin.tenant_id, actorId: admin.id, actorType: 'admin',
+          action: 'LOGIN_2FA_FAILED', details: { email }, ip: request.ip,
+        });
+        return reply.status(401).send({ error: 'Invalid 2FA code', code: 'INVALID_2FA_CODE' });
+      }
+    }
+
     const jwtRole = ['admin', 'seller', 'retention'].includes(admin.role) ? admin.role : 'admin';
     const token = fastify.jwt.sign(
       { sub: admin.id, email: admin.email, role: jwtRole, tenantId: admin.tenant_id },
@@ -343,7 +364,7 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
     );
 
     // Sprint 2.3: audit successful admin login
-    await audit.log({ tenantId: admin.tenant_id, actorId: admin.id, actorType: 'admin', action: 'LOGIN_SUCCESS', details: { email, role: jwtRole }, ip: request.ip });
+    await audit.log({ tenantId: admin.tenant_id, actorId: admin.id, actorType: 'admin', action: 'LOGIN_SUCCESS', details: { email, role: jwtRole, used_2fa: admin.totp_enabled }, ip: request.ip });
 
     return reply.send({
       data: {

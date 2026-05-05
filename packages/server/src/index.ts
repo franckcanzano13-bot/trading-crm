@@ -18,6 +18,7 @@ import { instrumentRoutes } from './modules/instruments/routes';
 import { tradingRoutes } from './modules/trading/routes';
 import { accountRoutes } from './modules/accounts/routes';
 import { adminClientRoutes } from './modules/users/routes';
+import { totpRoutes } from './modules/totp/routes';
 import { tenantRoutes } from './modules/tenants/routes';
 import { candlesRoute } from './modules/pricing/candles-route';
 import { crmRoutes } from './modules/crm/routes';
@@ -91,6 +92,7 @@ async function buildServer() {
   await fastify.register(tradingRoutes);
   await fastify.register(accountRoutes);
   await fastify.register(adminClientRoutes);
+  await fastify.register(totpRoutes);
   await fastify.register(tenantRoutes);
   await fastify.register(candlesRoute);
   await fastify.register(crmRoutes);

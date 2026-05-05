@@ -10,6 +10,10 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   FINNHUB_API_KEY: z.string().optional().default(''),
   TWELVEDATA_API_KEY: z.string().optional().default(''),
+  // Sprint 2.2: CORS whitelist (comma-separated). In dev, * allows any origin.
+  CORS_ALLOWED_ORIGINS: z.string().optional().default('*'),
+  // Sprint 2.4: encryption key (hex 32 bytes / 64 chars) for AES-256-GCM
+  ENCRYPTION_KEY: z.string().optional().default(''),
 });
 
 function loadConfig() {

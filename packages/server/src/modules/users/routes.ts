@@ -275,7 +275,12 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
   });
 
   // Admin login (separate from trader login)
-  fastify.post('/api/v1/admin/login', async (request, reply) => {
+  fastify.post('/api/v1/admin/login', {
+    config: {
+      // Sprint 2.1: brute-force protection — 5 attempts per 15 min per IP
+      rateLimit: { max: 5, timeWindow: '15 minutes' },
+    },
+  }, async (request, reply) => {
     const { email, password, tenant_id } = request.body as { email: string; password: string; tenant_id: string };
 
     if (!email || !password || !tenant_id) {
@@ -317,7 +322,12 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
   });
 
   // SuperAdmin login
-  fastify.post('/api/v1/super/login', async (request, reply) => {
+  fastify.post('/api/v1/super/login', {
+    config: {
+      // Sprint 2.1: brute-force protection — 5 attempts per 15 min per IP
+      rateLimit: { max: 5, timeWindow: '15 minutes' },
+    },
+  }, async (request, reply) => {
     const { email, password } = request.body as { email: string; password: string };
 
     if (!email || !password) {

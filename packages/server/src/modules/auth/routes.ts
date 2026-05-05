@@ -53,6 +53,10 @@ export async function authRoutes(fastify: FastifyInstance) {
   // Login
   fastify.post('/api/v1/auth/login', {
     preHandler: [tenantResolver],
+    config: {
+      // Sprint 2.1: brute-force protection — 5 attempts per 15 min per IP
+      rateLimit: { max: 5, timeWindow: '15 minutes' },
+    },
   }, async (request, reply) => {
     const parsed = LoginSchema.safeParse(request.body);
     if (!parsed.success) {

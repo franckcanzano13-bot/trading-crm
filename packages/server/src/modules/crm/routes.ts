@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../../shared/database/prisma';
 import { tenantResolver } from '../../shared/middleware/tenant-resolver';
 import { requireAdmin } from '../../shared/middleware/auth';
+import { sha256 } from '../../shared/crypto';
 import crypto from 'crypto';
 
 const logger = require('pino')({ name: 'crm' });
@@ -537,12 +538,23 @@ export async function crmRoutes(fastify: FastifyInstance) {
       orderBy: { created_at: 'desc' },
       include: { _count: { select: { leads: true, commissions: true } } },
     });
-    reply.send({ data: affiliates });
+    // Sprint 2.4: never return plaintext api_key in lists. Show only prefix.
+    const masked = affiliates.map(a => {
+      const { api_key: _legacy, api_key_hash: _hash, ...rest } = a;
+      return { ...rest, api_key_masked: a.api_key_prefix ? `${a.api_key_prefix}...` : '****' };
+    });
+    reply.send({ data: masked });
   });
 
   fastify.post('/api/v1/crm/affiliates', { preHandler: auth }, async (request, reply) => {
     const { tenantId } = request as any;
     const body = CreateAffiliateSchema.parse(request.body);
+
+    // Sprint 2.4: store the SHA-256 hash, not the plaintext API key.
+    // The plaintext is returned ONCE in this response — admin must save it.
+    const apiKeyPlaintext = generateCode('ak', 24);
+    const apiKeyHash = sha256(apiKeyPlaintext);
+    const apiKeyPrefix = apiKeyPlaintext.slice(0, 8);
 
     const affiliate = await prisma.affiliate.create({
       data: {
@@ -552,11 +564,21 @@ export async function crmRoutes(fastify: FastifyInstance) {
         cpl_amount: BigInt(body.cpl_amount),
         min_ftd: BigInt(body.min_ftd),
         tracking_code: generateCode('AFF'),
-        api_key: generateCode('ak', 24),
+        api_key: apiKeyPlaintext,    // legacy column, will be removed once all keys rotated
+        api_key_hash: apiKeyHash,
+        api_key_prefix: apiKeyPrefix,
       },
     });
     logger.info({ affiliateId: affiliate.id, name: body.name }, '[CRM] Affiliate created');
-    reply.status(201).send({ data: affiliate });
+
+    // Return plaintext key just this once. Future GETs will only show the prefix.
+    reply.status(201).send({
+      data: {
+        ...affiliate,
+        api_key: apiKeyPlaintext,
+        api_key_warning: 'Save this API key now — it cannot be retrieved later.',
+      },
+    });
   });
 
   fastify.patch('/api/v1/crm/affiliates/:id', { preHandler: auth }, async (request, reply) => {
@@ -774,7 +796,14 @@ export async function crmRoutes(fastify: FastifyInstance) {
     const apiKey = (request.headers['x-api-key'] || (request.query as any).api_key) as string;
     if (!apiKey) return reply.status(401).send({ error: 'API key required', code: 'UNAUTHORIZED' });
 
-    const affiliate = await prisma.affiliate.findUnique({ where: { api_key: apiKey } });
+    // Sprint 2.4: lookup by SHA-256 hash (not plaintext). Falls back to legacy
+    // plaintext column for keys created before the migration.
+    const apiKeyHash = sha256(apiKey);
+    let affiliate = await prisma.affiliate.findFirst({ where: { api_key_hash: apiKeyHash } });
+    if (!affiliate) {
+      // Backward-compat: legacy keys still stored as plaintext
+      affiliate = await prisma.affiliate.findUnique({ where: { api_key: apiKey } });
+    }
     if (!affiliate) return reply.status(401).send({ error: 'Invalid API key', code: 'UNAUTHORIZED' });
     if (affiliate.status !== 'ACTIVE') return reply.status(403).send({ error: 'Affiliate account inactive', code: 'INACTIVE' });
 
@@ -837,7 +866,12 @@ export async function crmRoutes(fastify: FastifyInstance) {
     const apiKey = (request.headers['x-api-key'] || (request.query as any).api_key) as string;
     if (!apiKey) return reply.status(401).send({ error: 'API key required', code: 'UNAUTHORIZED' });
 
-    const affiliate = await prisma.affiliate.findUnique({ where: { api_key: apiKey } });
+    // Sprint 2.4: lookup by hash with legacy fallback
+    const apiKeyHash = sha256(apiKey);
+    let affiliate = await prisma.affiliate.findFirst({ where: { api_key_hash: apiKeyHash } });
+    if (!affiliate) {
+      affiliate = await prisma.affiliate.findUnique({ where: { api_key: apiKey } });
+    }
     if (!affiliate) return reply.status(401).send({ error: 'Invalid API key', code: 'UNAUTHORIZED' });
 
     const commissions = await prisma.commission.findMany({

@@ -373,7 +373,9 @@ model Affiliate {
   phone           String   @default("")
   company         String   @default("")
   tracking_code   String   @unique     // Unique code used in tracking URLs
-  api_key         String   @unique     // API key for affiliate API access
+  api_key         String   @unique     // [DEPRECATED, kept for backward compat] plaintext API key
+  api_key_hash    String   @default("") // Sprint 2.4: SHA-256 of the API key — used for lookup
+  api_key_prefix  String   @default("") // First 8 chars of the key, shown in admin UI
   commission_type String   @default("CPA")  // CPA, CPL, REVENUE_SHARE, HYBRID
   cpa_amount      BigInt   @default(0)      // CPA commission (cents) per FTD
   cpl_amount      BigInt   @default(0)      // CPL commission (cents) per lead
@@ -392,6 +394,7 @@ model Affiliate {
 
   @@unique([tenant_id, email])
   @@index([tenant_id])
+  @@index([api_key_hash])
   @@map("affiliates")
 }
 

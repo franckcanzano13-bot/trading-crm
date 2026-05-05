@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { prisma } from '../../shared/database/prisma';
 import { tenantResolver } from '../../shared/middleware/tenant-resolver';
 import { requireAdmin } from '../../shared/middleware/auth';
+import { encrypt, decrypt } from '../../shared/crypto';
 import nodemailer from 'nodemailer';
 
 const logger = require('pino')({ name: 'email' });
@@ -16,12 +17,14 @@ function replaceVariables(template: string, vars: Record<string, string>): strin
 async function getTransporter(tenantId: string) {
   const config = await prisma.brokerConfig.findUnique({ where: { tenant_id: tenantId } });
   if (!config || !config.smtp_host) return null;
+  // Sprint 2.4: smtp_pass stored encrypted — decrypt before use
+  const smtpPass = decrypt(config.smtp_pass || '');
   return {
     transporter: nodemailer.createTransport({
       host: config.smtp_host,
       port: config.smtp_port,
       secure: config.smtp_secure,
-      auth: { user: config.smtp_user, pass: config.smtp_pass },
+      auth: { user: config.smtp_user, pass: smtpPass },
     }),
     from: `"${config.smtp_from_name || config.company_name}" <${config.smtp_from_email || config.smtp_user}>`,
     config,
@@ -70,7 +73,9 @@ export async function emailRoutes(fastify: FastifyInstance) {
       const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
       config = await prisma.brokerConfig.create({ data: { tenant_id: tenantId, company_name: tenant?.name || '' } });
     }
-    reply.send({ data: config });
+    // Sprint 2.4: never return smtp_pass plaintext or ciphertext to the client
+    const { smtp_pass, ...safe } = config;
+    reply.send({ data: { ...safe, smtp_pass: smtp_pass ? '***' : '' } });
   });
 
   fastify.patch('/api/v1/crm/broker-config', { preHandler: auth }, async (request, reply) => {
@@ -85,8 +90,17 @@ export async function emailRoutes(fastify: FastifyInstance) {
     if (!config) {
       config = await prisma.brokerConfig.create({ data: { tenant_id: tenantId } });
     }
-    const updated = await prisma.brokerConfig.update({ where: { tenant_id: tenantId }, data: body });
-    reply.send({ data: updated });
+    // Sprint 2.4: encrypt smtp_pass before storing.
+    // If client sends an already-encrypted blob (rare), encrypt() is idempotent
+    // only on plaintext, so we skip if it's already in v1 format.
+    const dataToWrite = { ...body };
+    if (typeof dataToWrite.smtp_pass === 'string' && dataToWrite.smtp_pass !== '' && !dataToWrite.smtp_pass.startsWith('v1:')) {
+      dataToWrite.smtp_pass = encrypt(dataToWrite.smtp_pass);
+    }
+    const updated = await prisma.brokerConfig.update({ where: { tenant_id: tenantId }, data: dataToWrite });
+    // Don't return the encrypted blob to the client
+    const { smtp_pass, ...safe } = updated;
+    reply.send({ data: { ...safe, smtp_pass: smtp_pass ? '***' : '' } });
   });
 
   // ═══════════════════════════════════════

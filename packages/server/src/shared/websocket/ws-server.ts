@@ -10,17 +10,48 @@ interface WsClient {
   subscriptions: Set<string>;
   tenantId?: string;
   userId?: string;
+  isAlive?: boolean;  // Sprint 2.7: heartbeat tracking
 }
 
 const clients = new Set<WsClient>();
 
+// Sprint 2.7: heartbeat — every 30s, ping all sockets.
+// If we don't get a pong before the next round, the socket is dead → terminate.
+let heartbeatInterval: NodeJS.Timeout | null = null;
+function startHeartbeat() {
+  if (heartbeatInterval) return;
+  heartbeatInterval = setInterval(() => {
+    for (const client of clients) {
+      if (client.isAlive === false) {
+        // Did not respond to last ping — kill it
+        try { client.socket.terminate(); } catch {}
+        clients.delete(client);
+        continue;
+      }
+      client.isAlive = false;
+      try { client.socket.ping(); } catch {}
+    }
+  }, 30_000);
+  // Don't keep the process alive just for this
+  if (heartbeatInterval.unref) heartbeatInterval.unref();
+}
+
+function trackHeartbeat(client: WsClient) {
+  client.isAlive = true;
+  client.socket.on('pong', () => { client.isAlive = true; });
+}
+
 export function setupWebSocketServer(fastify: FastifyInstance) {
+  // Sprint 2.7: start the global heartbeat once
+  startHeartbeat();
+
   fastify.get('/ws/prices', { websocket: true }, (socket, request) => {
     const client: WsClient = {
       socket,
       subscriptions: new Set(['*']), // Subscribe to all by default
     };
     clients.add(client);
+    trackHeartbeat(client);
 
     logger.info({ clientCount: clients.size }, 'WebSocket client connected');
 
@@ -57,6 +88,7 @@ export function setupWebSocketServer(fastify: FastifyInstance) {
   fastify.get('/ws/account', { websocket: true }, (socket, request) => {
     const client: WsClient = { socket, subscriptions: new Set() };
     clients.add(client);
+    trackHeartbeat(client);
     let authTimer: NodeJS.Timeout | null = setTimeout(() => {
       // Drop unauthenticated clients after 5s
       if (!client.userId) {
@@ -93,6 +125,7 @@ export function setupWebSocketServer(fastify: FastifyInstance) {
   fastify.get('/ws/notifications', { websocket: true }, (socket, request) => {
     const client: WsClient = { socket, subscriptions: new Set() };
     clients.add(client);
+    trackHeartbeat(client);
     let authTimer: NodeJS.Timeout | null = setTimeout(() => {
       if (!client.userId) { try { socket.close(1008, 'auth_timeout'); } catch {} }
     }, 5000);

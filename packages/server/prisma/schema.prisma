@@ -149,6 +149,10 @@ model Trade {
 
   dealer_interventions DealerIntervention[]
 
+  // Audit DB-001: indexes for hot paths (open positions, history listing)
+  @@index([tenant_id, status])
+  @@index([tenant_id, user_id, status])
+  @@index([tenant_id, account_id, status])
   @@map("trades")
 }
 
@@ -203,6 +207,8 @@ model Transaction {
 
   account Account @relation(fields: [account_id], references: [id])
 
+  // Audit DB-001: index for admin transaction listing perf
+  @@index([tenant_id, account_id, created_at])
   @@map("transactions")
 }
 

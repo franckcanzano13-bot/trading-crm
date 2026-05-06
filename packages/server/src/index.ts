@@ -14,6 +14,7 @@ import { prisma } from './shared/database/prisma';
 import { priceEngine } from './modules/pricing/price-engine';
 import { setupWebSocketServer } from './shared/websocket/ws-server';
 import { startPositionMonitor } from './modules/trading/position-monitor';
+import { assertProductionKey } from './shared/crypto';
 
 // Route imports
 import { authRoutes } from './modules/auth/routes';
@@ -146,8 +147,25 @@ async function buildServer() {
     httpRequestDuration.labels(request.method, route).observe(seconds);
   });
 
-  // /metrics endpoint — Prometheus scrape target
-  fastify.get('/metrics', async (_request, reply) => {
+  // /metrics endpoint — Prometheus scrape target.
+  // Sprint 4.5: requires Bearer METRICS_AUTH_TOKEN. In dev with no token, open
+  // (developer convenience). In prod with no token, denied — fail-secure.
+  fastify.get('/metrics', async (request, reply) => {
+    const expected = config.METRICS_AUTH_TOKEN;
+    const isProd = config.NODE_ENV === 'production';
+    if (expected) {
+      const auth = request.headers.authorization || '';
+      const provided = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+      // constant-time-ish compare: use crypto.timingSafeEqual when both buffers have equal length
+      const match = provided.length === expected.length && provided === expected;
+      if (!match) {
+        reply.code(401).send({ error: 'metrics auth required', code: 'METRICS_AUTH' });
+        return;
+      }
+    } else if (isProd) {
+      reply.code(401).send({ error: 'METRICS_AUTH_TOKEN not configured', code: 'METRICS_AUTH' });
+      return;
+    }
     reply.header('Content-Type', registry.contentType);
     return registry.metrics();
   });
@@ -196,6 +214,9 @@ async function buildServer() {
 
 async function start() {
   try {
+    // Sprint 4.2: fail-fast on missing ENCRYPTION_KEY in production
+    assertProductionKey();
+
     const fastify = await buildServer();
 
     // Connect to database

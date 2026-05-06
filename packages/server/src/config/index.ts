@@ -14,6 +14,8 @@ const envSchema = z.object({
   CORS_ALLOWED_ORIGINS: z.string().optional().default('*'),
   // Sprint 2.4: encryption key (hex 32 bytes / 64 chars) for AES-256-GCM
   ENCRYPTION_KEY: z.string().optional().default(''),
+  // Sprint 4.5: bearer token to access /metrics. Empty = open in dev, denied in prod.
+  METRICS_AUTH_TOKEN: z.string().optional().default(''),
 });
 
 function loadConfig() {

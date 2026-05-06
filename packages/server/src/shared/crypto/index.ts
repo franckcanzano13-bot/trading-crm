@@ -36,10 +36,29 @@ function getKey(): Buffer | null {
 
 let warnedNoKey = false;
 
+/**
+ * Sprint 4.2: Fail-fast in production if ENCRYPTION_KEY is missing or invalid.
+ * Exported for testability — called at boot from src/index.ts.
+ */
+export function assertProductionKey(): void {
+  if (process.env.NODE_ENV !== 'production') return;
+  const hex = (process.env.ENCRYPTION_KEY || '').trim();
+  if (!hex) {
+    throw new Error('ENCRYPTION_KEY required in production. Generate with: openssl rand -hex 32');
+  }
+  if (hex.length !== 64) {
+    throw new Error(`ENCRYPTION_KEY must be 64 hex chars (32 bytes). Got ${hex.length}.`);
+  }
+}
+
 export function encrypt(plaintext: string): string {
   if (plaintext === '' || plaintext == null) return '';
   const key = getKey();
   if (!key) {
+    // Sprint 4.2: in production, fail loudly. In dev, warn-once and store plaintext.
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('ENCRYPTION_KEY required in production — refusing to store plaintext secret');
+    }
     if (!warnedNoKey) {
       logger.warn('[crypto] ENCRYPTION_KEY not set — secrets stored as plaintext (dev only)');
       warnedNoKey = true;

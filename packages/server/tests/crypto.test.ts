@@ -56,4 +56,47 @@ describe('AES-256-GCM helper (Sprint 2.4)', () => {
     parts[3] = tampered;
     expect(mod.decrypt(parts.join(':'))).toBe('');
   });
+
+  // Sprint 4.2: production fail-fast
+  describe('assertProductionKey', () => {
+    it('passes silently in development without key', () => {
+      const oldEnv = process.env.NODE_ENV;
+      const oldKey = process.env.ENCRYPTION_KEY;
+      process.env.NODE_ENV = 'development';
+      delete process.env.ENCRYPTION_KEY;
+      expect(() => mod.assertProductionKey()).not.toThrow();
+      process.env.NODE_ENV = oldEnv;
+      if (oldKey) process.env.ENCRYPTION_KEY = oldKey;
+    });
+
+    it('throws in production when key missing', () => {
+      const oldEnv = process.env.NODE_ENV;
+      const oldKey = process.env.ENCRYPTION_KEY;
+      process.env.NODE_ENV = 'production';
+      delete process.env.ENCRYPTION_KEY;
+      expect(() => mod.assertProductionKey()).toThrow(/ENCRYPTION_KEY required/);
+      process.env.NODE_ENV = oldEnv;
+      if (oldKey) process.env.ENCRYPTION_KEY = oldKey;
+    });
+
+    it('throws in production when key has wrong length', () => {
+      const oldEnv = process.env.NODE_ENV;
+      const oldKey = process.env.ENCRYPTION_KEY;
+      process.env.NODE_ENV = 'production';
+      process.env.ENCRYPTION_KEY = 'tooshort';
+      expect(() => mod.assertProductionKey()).toThrow(/64 hex chars/);
+      process.env.NODE_ENV = oldEnv;
+      if (oldKey) process.env.ENCRYPTION_KEY = oldKey;
+    });
+
+    it('encrypt() throws in production without key', () => {
+      const oldEnv = process.env.NODE_ENV;
+      const oldKey = process.env.ENCRYPTION_KEY;
+      process.env.NODE_ENV = 'production';
+      delete process.env.ENCRYPTION_KEY;
+      expect(() => mod.encrypt('secret')).toThrow();
+      process.env.NODE_ENV = oldEnv;
+      if (oldKey) process.env.ENCRYPTION_KEY = oldKey;
+    });
+  });
 });

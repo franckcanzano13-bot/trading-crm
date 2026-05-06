@@ -7,6 +7,7 @@ import rateLimit from '@fastify/rate-limit';
 import websocket from '@fastify/websocket';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
+import { registry, httpRequestsTotal, httpRequestDuration } from './shared/metrics';
 import { config } from './config/index';
 import { logger } from './shared/utils/index';
 import { prisma } from './shared/database/prisma';
@@ -129,6 +130,26 @@ async function buildServer() {
     return JSON.parse(JSON.stringify(payload, (_, value) =>
       typeof value === 'bigint' ? value.toString() : value
     ));
+  });
+
+  // Sprint 3.3: HTTP metrics — record every request duration & status
+  fastify.addHook('onRequest', async (request) => {
+    (request as any)._metricsStart = process.hrtime.bigint();
+  });
+  fastify.addHook('onResponse', async (request, reply) => {
+    const start = (request as any)._metricsStart as bigint | undefined;
+    if (!start) return;
+    const seconds = Number(process.hrtime.bigint() - start) / 1e9;
+    // Use routerPath (not raw URL) to avoid high-cardinality from path params
+    const route = (request as any).routeOptions?.url || request.routerPath || 'unknown';
+    httpRequestsTotal.labels(request.method, route, String(reply.statusCode)).inc();
+    httpRequestDuration.labels(request.method, route).observe(seconds);
+  });
+
+  // /metrics endpoint — Prometheus scrape target
+  fastify.get('/metrics', async (_request, reply) => {
+    reply.header('Content-Type', registry.contentType);
+    return registry.metrics();
   });
 
   // ─── Routes ───

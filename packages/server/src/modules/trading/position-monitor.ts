@@ -2,6 +2,7 @@ import { prisma } from '../../shared/database/prisma';
 import { getCurrentPrice } from '../pricing/price-store';
 import { logger, priceToInt, calculateMarginCents, calculatePnlCents } from '../../shared/utils/index';
 import { audit } from '../../shared/audit';
+import { recordTradePnl } from '../../shared/segregation';
 
 /**
  * Position Monitor — Background loop that checks all open positions against live prices.
@@ -481,6 +482,15 @@ async function closeDealerTrade(trade: any, closePrice: number, reason: string) 
           description: `${reason}: ${trade.side} ${trade.instrument?.symbol || 'unknown'} dealer trade closed`,
         },
       });
+
+      // Sprint 7.6: segregation ledger — client/broker pool entries.
+      await recordTradePnl(tx, {
+        tenantId: trade.tenant_id,
+        accountId: account.id,
+        pnlCents: finalPnl,
+        reference: `trade:${trade.id}`,
+        description: `${reason}: ${trade.side} ${trade.instrument?.symbol || 'unknown'}`,
+      });
     }
   });
 
@@ -544,6 +554,15 @@ async function closeTradeAtPrice(
         amount: pnlCents,
         description: `${reason}: ${trade.side} ${trade.volume} ${trade.instrument?.symbol || 'unknown'} P&L`,
       },
+    });
+
+    // Sprint 7.6: segregation ledger — client/broker pool entries.
+    await recordTradePnl(tx, {
+      tenantId: trade.tenant_id,
+      accountId: account.id,
+      pnlCents,
+      reference: `trade:${trade.id}`,
+      description: `${reason}: ${trade.side} ${trade.volume} ${trade.instrument?.symbol || 'unknown'}`,
     });
 
     return { closed: true, newBalance: safeBalance, newMarginUsed: safeMargin } as const;

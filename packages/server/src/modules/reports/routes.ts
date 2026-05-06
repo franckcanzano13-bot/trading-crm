@@ -19,6 +19,7 @@ import { prisma } from '../../shared/database/prisma';
 import { audit } from '../../shared/audit';
 import { logger, isValidLei } from '../../shared/utils/index';
 import { buildMifirCsv, buildMifirJson, MifirTradeRow } from './mifir-export';
+import { getPoolBalances } from '../../shared/segregation';
 
 const QuerySchema = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'from must be YYYY-MM-DD'),
@@ -172,6 +173,41 @@ export async function reportsRoutes(fastify: FastifyInstance) {
         to: parsed.data.to,
         count: rows.length,
         data,
+      });
+    },
+  );
+
+  // Sprint 7.6 — Client funds segregation snapshot.
+  // CASS / MiFID II: brokers must demonstrate they hold client money
+  // separately from operating funds. Returns the running ledger sum per
+  // pool plus a drift check vs sum(account.balance) for the tenant.
+  fastify.get(
+    '/api/v1/admin/reports/segregation',
+    { preHandler: [tenantResolver, requireAdmin] },
+    async (request, reply) => {
+      const balances = await getPoolBalances(request.tenantId!);
+
+      await audit.log({
+        tenantId: request.tenantId!, actorId: request.userData!.sub, actorType: 'admin',
+        action: 'SEGREGATION_REPORT',
+        target: `tenant:${request.tenantId}`,
+        details: {
+          client_trust_cents: balances.client_trust_cents.toString(),
+          broker_operating_cents: balances.broker_operating_cents.toString(),
+          drift_cents: balances.drift_cents.toString(),
+        },
+        ip: request.ip,
+      });
+
+      return reply.send({
+        as_of: new Date().toISOString(),
+        client_trust_cents: balances.client_trust_cents.toString(),
+        broker_operating_cents: balances.broker_operating_cents.toString(),
+        account_balance_total_cents: balances.account_balance_total_cents.toString(),
+        drift_cents: balances.drift_cents.toString(),
+        // A non-zero drift means the ledger and the account balances disagree.
+        // If you see this in production: stop, investigate, do not ignore.
+        drift_status: balances.drift_cents === 0n ? 'OK' : 'DRIFT_DETECTED',
       });
     },
   );

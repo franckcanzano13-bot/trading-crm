@@ -5,6 +5,7 @@ import { requireAdmin } from '../../shared/middleware/auth';
 import { serializeBigInt } from '../../shared/utils/index';
 import { prisma } from '../../shared/database/prisma';
 import { audit } from '../../shared/audit';
+import { recordDeposit, recordWithdrawal } from '../../shared/segregation';
 
 const UpdateClientSchema = z.object({
   status: z.enum(['ACTIVE', 'INACTIVE', 'BLOCKED']).optional(),
@@ -117,7 +118,7 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
           data: { balance: safeBalance, margin_used: BigInt(account.margin_used), equity: safeEquity },
         });
 
-        await tx.transaction.create({
+        const transaction = await tx.transaction.create({
           data: {
             tenant_id: tenantId,
             account_id: account.id,
@@ -125,6 +126,14 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
             amount: amountCents,
             description: description || 'Manual deposit',
           },
+        });
+
+        // Sprint 7.6: client funds segregation — +CLIENT_TRUST inside the
+        // same atomic transaction so ledger and balance can never drift.
+        await recordDeposit(tx, {
+          tenantId, accountId: account.id,
+          amountCents, reference: `transaction:${transaction.id}`,
+          description: description || 'Manual deposit',
         });
 
         return safeBalance;
@@ -186,7 +195,7 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
           data: { balance: safeBalance, margin_used: BigInt(account.margin_used), equity: safeEquity },
         });
 
-        await tx.transaction.create({
+        const transaction = await tx.transaction.create({
           data: {
             tenant_id: tenantId,
             account_id: account.id,
@@ -194,6 +203,13 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
             amount: -amountCents,
             description: description || 'Manual withdrawal',
           },
+        });
+
+        // Sprint 7.6: -CLIENT_TRUST in the segregation ledger.
+        await recordWithdrawal(tx, {
+          tenantId, accountId: account.id,
+          amountCents, reference: `transaction:${transaction.id}`,
+          description: description || 'Manual withdrawal',
         });
 
         return safeBalance;

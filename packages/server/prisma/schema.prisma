@@ -302,6 +302,41 @@ model Invoice {
 
 // ─── Audit Log ───
 
+// Sprint 7.6 — Client Funds Segregation Ledger.
+//
+// MiFID II / FCA CASS / ASIC client-money rules require client funds to be
+// held separately from broker operating funds. We model this as a
+// double-entry ledger: every movement of client money writes paired rows,
+// one to CLIENT_TRUST and one to BROKER_OPERATING (or the reverse).
+//
+// Examples:
+//   DEPOSIT  $100 → +100 CLIENT_TRUST           (no broker leg)
+//   B-book client loses $100 trade
+//                     → -100 CLIENT_TRUST, +100 BROKER_OPERATING
+//   B-book client wins $50 trade
+//                     →  +50 CLIENT_TRUST,  -50 BROKER_OPERATING
+//
+// SUM(amount_cents) per pool is the running balance.  CLIENT_TRUST should
+// equal SUM(account.balance) for the tenant's user accounts at any time;
+// any drift indicates a bug or unsegregated movement and is the report
+// surface for ops.
+model ClientFundsLedger {
+  id          String   @id @default(uuid())
+  tenant_id   String
+  account_id  String
+  pool        String   // 'CLIENT_TRUST' | 'BROKER_OPERATING'
+  amount_cents BigInt   // signed; +inflow / -outflow for this pool
+  kind        String   // DEPOSIT, WITHDRAWAL, TRADE_PNL, COMMISSION, ADJUSTMENT
+  reference   String   @default("")  // e.g. "trade:uuid" or "transaction:uuid"
+  description String   @default("")
+  created_at  DateTime @default(now())
+
+  @@index([tenant_id, pool, created_at])
+  @@index([tenant_id, account_id, created_at])
+  @@index([reference])
+  @@map("client_funds_ledger")
+}
+
 model AuditLog {
   id         String   @id @default(uuid())
   tenant_id  String   @default("")    // empty for superadmin / system actions

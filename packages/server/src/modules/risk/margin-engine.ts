@@ -2,6 +2,7 @@ import { TenantQuery } from '../../shared/database/tenant-queries';
 import { prisma } from '../../shared/database/prisma';
 import { getCurrentPrice } from '../pricing/price-store';
 import { calculatePnlCents, calculateMarginCents, logger } from '../../shared/utils/index';
+import { recordTradePnl } from '../../shared/segregation';
 
 export interface RiskCheck {
   equity: bigint;
@@ -148,6 +149,15 @@ export async function checkAndLiquidate(
             amount: trade.pnl,
             description: `Liquidated ${trade.side} ${trade.volume} ${trade.symbol}`,
           },
+        });
+
+        // Sprint 7.6: segregation ledger — paired entries for liquidation P&L.
+        await recordTradePnl(tx, {
+          tenantId,
+          accountId,
+          pnlCents: trade.pnl,
+          reference: `trade:${trade.id}`,
+          description: `Liquidated ${trade.side} ${trade.volume} ${trade.symbol}`,
         });
       }
       return true;

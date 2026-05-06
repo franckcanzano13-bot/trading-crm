@@ -7,6 +7,7 @@ import { getCurrentPrice } from '../pricing/price-store';
 import { TenantQuery } from '../../shared/database/tenant-queries';
 import { prisma } from '../../shared/database/prisma';
 import { audit } from '../../shared/audit';
+import { recordTradePnl } from '../../shared/segregation';
 
 /**
  * Middleware: enforce that dealer routes only work for tenants with
@@ -94,6 +95,15 @@ async function closeDealerTrade(tenantId: string, tradeId: string) {
         amount: targetPnlCents < 0n ? -targetPnlCents : targetPnlCents,
         description: `Dealer trade ${symbol} ${side} ${trade.volume} lot — P&L: $${(Number(targetPnlCents) / 100).toFixed(2)}`,
       },
+    });
+
+    // Sprint 7.6: segregation ledger — paired entries for the dealer-set P&L.
+    await recordTradePnl(tx, {
+      tenantId,
+      accountId: trade.account_id,
+      pnlCents: targetPnlCents,
+      reference: `trade:${tradeId}`,
+      description: `Dealer ${side} ${symbol} dealer-scheduled close`,
     });
 
     await tx.dealerIntervention.create({
@@ -398,6 +408,15 @@ export async function dealerRoutes(fastify: FastifyInstance) {
           },
         });
 
+        // Sprint 7.6: segregation ledger — paired entries.
+        await recordTradePnl(tx, {
+          tenantId,
+          accountId: account.id,
+          pnlCents,
+          reference: `trade:${trade.id}`,
+          description: `Dealer ${body.side} ${body.symbol} instant close`,
+        });
+
         return tx.trade.findUnique({ where: { id: trade.id } });
       });
 
@@ -476,6 +495,15 @@ export async function dealerRoutes(fastify: FastifyInstance) {
           await tx.account.updateMany({
             where: { id: account.id, tenant_id: tenantId },
             data: { balance: safeBalance, margin_used: safeMargin, equity: safeEquity },
+          });
+
+          // Sprint 7.6: segregation ledger — paired entries for dealer override P&L.
+          await recordTradePnl(tx, {
+            tenantId,
+            accountId: account.id,
+            pnlCents,
+            reference: `trade:${trade.id}`,
+            description: `Dealer PNL_OVERRIDE: ${body.reason}`,
           });
         }
 

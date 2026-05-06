@@ -7,6 +7,7 @@ import { serializeBigInt, logger, priceToInt, calculateMarginCents, calculatePnl
 import { executeOrder } from './engine';
 import { prisma } from '../../shared/database/prisma';
 import { audit } from '../../shared/audit';
+import { recordTradePnl } from '../../shared/segregation';
 
 const UpdateSLTPSchema = z.object({
   stop_loss: z.number().positive().nullable().optional(),
@@ -179,6 +180,15 @@ export async function tradingRoutes(fastify: FastifyInstance) {
               amount: pnlCents,
               description: `Closed ${trade.side} ${trade.volume} ${trade.symbol} P&L`,
             },
+          });
+
+          // Sprint 7.6: paired ledger entries between CLIENT_TRUST and
+          // BROKER_OPERATING. Sum across both pools is always zero
+          // (conservation of money under B-Book).
+          await recordTradePnl(tx, {
+            tenantId, accountId: account.id,
+            pnlCents, reference: `trade:${trade.id}`,
+            description: `Closed ${trade.side} ${trade.volume} ${trade.symbol}`,
           });
         }
 

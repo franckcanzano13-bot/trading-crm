@@ -1,5 +1,5 @@
 import { prisma } from '../../shared/database/prisma';
-import { getCurrentPrice, getPriceMap } from '../pricing/price-store';
+import { getCurrentPrice } from '../pricing/price-store';
 import { logger, priceToInt, calculateMarginCents, calculatePnlCents } from '../../shared/utils/index';
 import { audit } from '../../shared/audit';
 
@@ -161,10 +161,9 @@ async function checkTrailingStops() {
     const price = getCurrentPrice(trade.instrument.symbol);
     if (!price || (price.bid === 0 && price.ask === 0)) continue;
 
-    const distance = (trade as any).trailing_stop_distance as number;
+    const distance = trade.trailing_stop_distance as number;
     const openPriceFloat = Number(trade.open_price) / 100000;
-    const trailingHigh =
-      ((trade as any).trailing_stop_high as number | null) ?? openPriceFloat;
+    const trailingHigh = trade.trailing_stop_high ?? openPriceFloat;
 
     // Use bid for BUY (close-at-bid) and ask for SELL (close-at-ask) — same
     // convention as fixed SL/TP.
@@ -260,6 +259,7 @@ export async function cancelOcoSiblings(ocoGroupId: string, filledOrderId: strin
  * Compute total unrealized P&L (cents) and rank trades worst-first.
  * Returns null if no live price is available for the trade list.
  */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 function computeAccountState(trades: Array<any>) {
   let totalUnrealizedPnlCents = BigInt(0);
   const ranked: Array<{ trade: any; pnlCents: bigint; closePrice: number }> = [];
@@ -341,8 +341,8 @@ async function checkMarginCalls() {
       // without re-querying. closeTradeAtPrice returns the new account snapshot
       // when successful; if it didn't, fall back to a manual estimate.
       if (closeResult && typeof closeResult === 'object' && 'newBalance' in closeResult) {
-        liveBalance = (closeResult as any).newBalance as bigint;
-        liveMarginUsed = (closeResult as any).newMarginUsed as bigint;
+        liveBalance = (closeResult as { newBalance: bigint }).newBalance;
+        liveMarginUsed = (closeResult as { newMarginUsed: bigint }).newMarginUsed;
       } else {
         // Best-effort estimate: pnl + balance, release the worst trade's margin
         liveBalance = liveBalance + worst.pnlCents;
@@ -654,7 +654,7 @@ async function fillPendingOrder(order: any, price: { bid: number; ask: number })
         logger.warn({ orderId: order.id }, '[PositionMonitor] No account for pending order, cancelling');
       } else {
         logger.warn(
-          { orderId: order.id, marginRequired: (result as any).marginRequired?.toString() },
+          { orderId: order.id, marginRequired: (result as { marginRequired?: bigint }).marginRequired?.toString() },
           '[PositionMonitor] Insufficient margin for pending order, cancelling'
         );
       }

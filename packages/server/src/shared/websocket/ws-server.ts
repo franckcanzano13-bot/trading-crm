@@ -45,7 +45,7 @@ export function setupWebSocketServer(fastify: FastifyInstance) {
   // Sprint 2.7: start the global heartbeat once
   startHeartbeat();
 
-  fastify.get('/ws/prices', { websocket: true }, (socket, request) => {
+  fastify.get('/ws/prices', { websocket: true }, (socket, _request) => {
     const client: WsClient = {
       socket,
       subscriptions: new Set(['*']), // Subscribe to all by default
@@ -85,7 +85,7 @@ export function setupWebSocketServer(fastify: FastifyInstance) {
   });
 
   // Account updates WebSocket
-  fastify.get('/ws/account', { websocket: true }, (socket, request) => {
+  fastify.get('/ws/account', { websocket: true }, (socket, _request) => {
     const client: WsClient = { socket, subscriptions: new Set() };
     clients.add(client);
     trackHeartbeat(client);
@@ -122,7 +122,7 @@ export function setupWebSocketServer(fastify: FastifyInstance) {
   });
 
   // Notifications WebSocket — same JWT auth model as /ws/account
-  fastify.get('/ws/notifications', { websocket: true }, (socket, request) => {
+  fastify.get('/ws/notifications', { websocket: true }, (socket, _request) => {
     const client: WsClient = { socket, subscriptions: new Set() };
     clients.add(client);
     trackHeartbeat(client);
@@ -170,7 +170,7 @@ export function setupWebSocketServer(fastify: FastifyInstance) {
 /**
  * Send an account update to a specific user.
  */
-export function sendAccountUpdate(userId: string, data: any) {
+export function sendAccountUpdate(userId: string, data: unknown) {
   const msg = JSON.stringify({ type: 'account_update', data });
   for (const client of clients) {
     if (client.userId === userId && client.socket.readyState === WebSocket.OPEN) {
@@ -182,7 +182,7 @@ export function sendAccountUpdate(userId: string, data: any) {
 /**
  * Send a notification to a specific user.
  */
-export function sendNotification(userId: string, data: { type: string; message: string; details?: any }) {
+export function sendNotification(userId: string, data: { type: string; message: string; details?: unknown }) {
   const msg = JSON.stringify({ type: 'notification', data });
   for (const client of clients) {
     if (client.userId === userId && client.socket.readyState === WebSocket.OPEN) {

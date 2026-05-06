@@ -5,7 +5,7 @@ export interface NotificationPayload {
   userId: string;
   type: 'MARGIN_CALL' | 'STOP_OUT' | 'ORDER_FILLED' | 'TRADE_CLOSED' | 'DEPOSIT' | 'WITHDRAWAL';
   message: string;
-  details?: any;
+  details?: unknown;
 }
 
 /**

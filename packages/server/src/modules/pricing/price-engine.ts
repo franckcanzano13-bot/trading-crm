@@ -309,7 +309,7 @@ export class PriceEngine extends EventEmitter {
    *  - spike: |new_mid - last_mid| / last_mid > 5% within 10s
    * Returns null if accepted, or a reason string if rejected.
    */
-  private validateTick(tick: PriceTick, source: string): string | null {
+  private validateTick(tick: PriceTick, _source: string): string | null {
     if (!tick || typeof tick.bid !== 'number' || typeof tick.ask !== 'number') return 'invalid_shape';
     if (!isFinite(tick.bid) || !isFinite(tick.ask)) return 'non_finite';
     if (tick.bid <= 0 || tick.ask <= 0) return 'non_positive';
@@ -477,7 +477,9 @@ export class PriceEngine extends EventEmitter {
   // ─── Candle building ───
 
   private updateCandle(tick: PriceTick) {
-    const timeframes = ['1s', '1m', '5m', '15m', '1h'];
+    // Note: '1s' is internal-only (not in shared Timeframe enum); the candle
+    // record cast at insertion is the only place where this leaks.
+    const timeframes = ['1s', '1m', '5m', '15m', '1h'] as const;
 
     for (const tf of timeframes) {
       const ms = TIMEFRAME_MS[tf];
@@ -499,7 +501,7 @@ export class PriceEngine extends EventEmitter {
       } else {
         symbolCandles.set(key, {
           instrument_id: tick.symbol,
-          timeframe: tf as any,
+          timeframe: tf as Exclude<typeof tf, '1s'>,
           open: mid,
           high: mid,
           low: mid,

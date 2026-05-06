@@ -22,7 +22,7 @@ declare module 'fastify' {
  */
 function checkTenantMatch(decoded: JwtUserPayload, request: FastifyRequest): string | null {
   if (decoded.role === 'superadmin') return null;
-  const resolvedTenantId = (request as any).tenantId;
+  const resolvedTenantId = request.tenantId;
   if (!resolvedTenantId) return null; // tenantResolver hasn't run, skip
   if (!decoded.tenantId) return 'JWT missing tenantId claim';
   if (decoded.tenantId !== resolvedTenantId) return 'Tenant mismatch';

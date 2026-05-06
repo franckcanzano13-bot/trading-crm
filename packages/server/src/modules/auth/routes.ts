@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import bcrypt from 'bcrypt';
 import { RegisterSchema, LoginSchema, BCRYPT_SALT_ROUNDS } from '@tradexlabel/shared';
 import { tenantResolver } from '../../shared/middleware/tenant-resolver';
-import { requireAuth, JwtUserPayload } from '../../shared/middleware/auth';
+import { requireAuth } from '../../shared/middleware/auth';
 import { serializeBigInt, logger } from '../../shared/utils/index';
 
 export async function authRoutes(fastify: FastifyInstance) {

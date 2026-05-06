@@ -85,10 +85,12 @@ export async function checkAndLiquidate(
   logger.warn({ accountId, marginLevel: risk.marginLevel }, 'Stop-out triggered');
 
   // Get open trades sorted by loss (liquidate biggest losers first)
-  const openTrades = await tenantQuery.findOpenTrades(userId);
-  const tradesWithPnl = openTrades
-    .filter((t: any) => t.account_id === accountId)
-    .map((trade: any) => {
+  type OpenTrade = Awaited<ReturnType<TenantQuery['findOpenTrades']>>[number];
+  type TradeWithPnl = OpenTrade & { currentPrice: number; pnl: bigint };
+  const openTrades: OpenTrade[] = await tenantQuery.findOpenTrades(userId);
+  const tradesWithPnl: TradeWithPnl[] = openTrades
+    .filter((t) => t.account_id === accountId)
+    .map((trade) => {
       const price = getCurrentPrice(trade.symbol);
       const currentPrice = trade.side === 'BUY' ? price.bid : price.ask;
       const openPriceFloat = Number(trade.open_price) / 100000;
@@ -96,10 +98,10 @@ export async function checkAndLiquidate(
       const pnl = calculatePnlCents(openPriceFloat, currentPrice, trade.volume, trade.lot_size, direction as 1 | -1);
       return { ...trade, currentPrice, pnl };
     })
-    .sort((a: any, b: any) => Number(a.pnl - b.pnl)); // Worst P&L first
+    .sort((a, b) => Number(a.pnl - b.pnl)); // Worst P&L first
 
   // Resolve tenantId from the TenantQuery instance (private field) for atomicity below
-  const tenantId = (tenantQuery as any).tenantId as string;
+  const tenantId = (tenantQuery as unknown as { tenantId: string }).tenantId;
 
   for (const trade of tradesWithPnl) {
     const closePriceInt = BigInt(Math.round(trade.currentPrice * 100000));

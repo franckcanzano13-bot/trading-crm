@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { Account, Instrument } from '@prisma/client';
 import { TenantQuery } from '../../shared/database/tenant-queries';
 import { prisma } from '../../shared/database/prisma';
 import { priceToInt, calculateMarginCents, logger } from '../../shared/utils/index';
@@ -11,8 +12,8 @@ export interface ExecuteOrderParams {
   tenantId: string;
   tenantSlug: string;
   userId: string;
-  account: any;
-  instrument: any;
+  account: Account;
+  instrument: Instrument;
   order: CreateOrderInput;
   executionMode?: string;
   fastify: FastifyInstance;

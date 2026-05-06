@@ -91,7 +91,7 @@ export class BinanceConnector extends EventEmitter {
 
         this.lastTickTime = Date.now();
         this.emit('tick', tick);
-      } catch (err: any) {
+      } catch {
         // Ignore parse errors
       }
     });

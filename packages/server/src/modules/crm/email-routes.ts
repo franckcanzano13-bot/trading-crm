@@ -32,7 +32,16 @@ async function getTransporter(tenantId: string) {
 }
 
 // ─── Build default email wrapper with broker branding ───
-function wrapEmailHtml(bodyHtml: string, config: any): string {
+type BrandingConfig = {
+  logo_url?: string;
+  company_name?: string;
+  primary_color?: string;
+  address?: string;
+  support_email?: string;
+  support_phone?: string;
+  website?: string;
+};
+function wrapEmailHtml(bodyHtml: string, config: BrandingConfig | null | undefined): string {
   const logo = config?.logo_url ? `<img src="${config.logo_url}" alt="${config.company_name}" style="max-height:50px;margin-bottom:20px;" />` : '';
   const color = config?.primary_color || '#6366f1';
   return `<!DOCTYPE html>
@@ -67,7 +76,7 @@ export async function emailRoutes(fastify: FastifyInstance) {
   // ═══════════════════════════════════════
 
   fastify.get('/api/v1/crm/broker-config', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
+    const tenantId = request.tenantId!;
     let config = await prisma.brokerConfig.findUnique({ where: { tenant_id: tenantId } });
     if (!config) {
       const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
@@ -79,10 +88,14 @@ export async function emailRoutes(fastify: FastifyInstance) {
   });
 
   fastify.patch('/api/v1/crm/broker-config', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const body = request.body as any;
+    const tenantId = request.tenantId!;
+    const body = (request.body ?? {}) as Record<string, unknown> & {
+      smtp_host?: string;
+      smtp_user?: string;
+      smtp_pass?: string;
+    };
     // Only admin can update SMTP settings
-    const ud = (request as any).userData || {};
+    const ud = request.userData || ({} as { sub?: string; role?: string });
     if (ud.role !== 'admin' && (body.smtp_host || body.smtp_user || body.smtp_pass)) {
       return reply.status(403).send({ error: 'Only admin can configure SMTP', code: 'FORBIDDEN' });
     }
@@ -108,9 +121,9 @@ export async function emailRoutes(fastify: FastifyInstance) {
   // ═══════════════════════════════════════
 
   fastify.get('/api/v1/crm/email-templates', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const q = request.query as any;
-    const where: any = { tenant_id: tenantId };
+    const tenantId = request.tenantId!;
+    const q = (request.query ?? {}) as { category?: string; active?: string };
+    const where: Record<string, unknown> = { tenant_id: tenantId };
     if (q.category) where.category = q.category;
     if (q.active !== undefined) where.is_active = q.active === 'true';
     const templates = await prisma.emailTemplate.findMany({ where, orderBy: { created_at: 'desc' } });
@@ -118,8 +131,8 @@ export async function emailRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/api/v1/crm/email-templates', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const ud = (request as any).userData || {};
+    const tenantId = request.tenantId!;
+    const ud = request.userData || ({} as { sub?: string; role?: string });
     const body = z.object({
       name: z.string().min(1),
       subject: z.string().min(1),
@@ -134,18 +147,18 @@ export async function emailRoutes(fastify: FastifyInstance) {
     reply.status(201).send({ data: template });
   });
 
-  fastify.patch('/api/v1/crm/email-templates/:id', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const { id } = request.params as any;
-    const body = request.body as any;
+  fastify.patch<{ Params: { id: string } }>('/api/v1/crm/email-templates/:id', { preHandler: auth }, async (request, reply) => {
+    const tenantId = request.tenantId!;
+    const { id } = request.params;
+    const body = (request.body ?? {}) as Record<string, unknown>;
     await prisma.emailTemplate.updateMany({ where: { id, tenant_id: tenantId }, data: body });
     const template = await prisma.emailTemplate.findUnique({ where: { id } });
     reply.send({ data: template });
   });
 
-  fastify.delete('/api/v1/crm/email-templates/:id', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const { id } = request.params as any;
+  fastify.delete<{ Params: { id: string } }>('/api/v1/crm/email-templates/:id', { preHandler: auth }, async (request, reply) => {
+    const tenantId = request.tenantId!;
+    const { id } = request.params;
     await prisma.emailTemplate.deleteMany({ where: { id, tenant_id: tenantId } });
     reply.send({ success: true });
   });
@@ -155,8 +168,8 @@ export async function emailRoutes(fastify: FastifyInstance) {
   // ═══════════════════════════════════════
 
   fastify.post('/api/v1/crm/email/send', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const ud = (request as any).userData || {};
+    const tenantId = request.tenantId!;
+    const ud = request.userData || ({} as { sub?: string; role?: string });
     const body = z.object({
       lead_id: z.string().uuid().optional(),
       to_email: z.string().email(),
@@ -234,10 +247,11 @@ export async function emailRoutes(fastify: FastifyInstance) {
           html: fullHtml,
         });
         logger.info({ to: body.to_email, subject }, '[Email] Sent successfully');
-      } catch (e: any) {
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
         status = 'FAILED';
-        error = e.message;
-        logger.error({ to: body.to_email, error: e.message }, '[Email] Send failed');
+        error = message;
+        logger.error({ to: body.to_email, error: message }, '[Email] Send failed');
       }
     } else {
       // No SMTP configured — log as sent for demo (email stored in log)
@@ -273,11 +287,11 @@ export async function emailRoutes(fastify: FastifyInstance) {
 
   // GET email history for a lead
   fastify.get('/api/v1/crm/email/history', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const q = request.query as any;
-    const where: any = { tenant_id: tenantId };
+    const tenantId = request.tenantId!;
+    const q = (request.query ?? {}) as { lead_id?: string; limit?: string };
+    const where: Record<string, unknown> = { tenant_id: tenantId };
     if (q.lead_id) where.lead_id = q.lead_id;
-    const emails = await prisma.emailLog.findMany({ where, orderBy: { created_at: 'desc' }, take: parseInt(q.limit) || 50 });
+    const emails = await prisma.emailLog.findMany({ where, orderBy: { created_at: 'desc' }, take: parseInt(q.limit ?? '') || 50 });
     reply.send({ data: emails });
   });
 
@@ -294,8 +308,8 @@ export async function emailRoutes(fastify: FastifyInstance) {
 
   // ─── Seed default templates ───
   fastify.post('/api/v1/crm/email-templates/seed', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const ud = (request as any).userData || {};
+    const tenantId = request.tenantId!;
+    const ud = request.userData || ({} as { sub?: string; role?: string });
     const defaults = [
       {
         name: 'Welcome', category: 'WELCOME',

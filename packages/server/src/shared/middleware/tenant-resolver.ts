@@ -6,7 +6,7 @@ declare module 'fastify' {
   interface FastifyRequest {
     tenantId?: string;
     tenantSlug?: string;
-    tenantConfig?: any;
+    tenantConfig?: string;
     tenantExecutionMode?: string;
     tenantQuery?: TenantQuery;
   }

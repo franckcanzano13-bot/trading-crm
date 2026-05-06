@@ -136,15 +136,17 @@ async function buildServer() {
   });
 
   // Sprint 3.3: HTTP metrics — record every request duration & status
+  type MetricsReq = { _metricsStart?: bigint; routeOptions?: { url?: string } };
   fastify.addHook('onRequest', async (request) => {
-    (request as any)._metricsStart = process.hrtime.bigint();
+    (request as unknown as MetricsReq)._metricsStart = process.hrtime.bigint();
   });
   fastify.addHook('onResponse', async (request, reply) => {
-    const start = (request as any)._metricsStart as bigint | undefined;
+    const r = request as unknown as MetricsReq;
+    const start = r._metricsStart;
     if (!start) return;
     const seconds = Number(process.hrtime.bigint() - start) / 1e9;
     // Use routerPath (not raw URL) to avoid high-cardinality from path params
-    const route = (request as any).routeOptions?.url || request.routerPath || 'unknown';
+    const route = r.routeOptions?.url || request.routerPath || 'unknown';
     httpRequestsTotal.labels(request.method, route, String(reply.statusCode)).inc();
     httpRequestDuration.labels(request.method, route).observe(seconds);
   });
@@ -220,7 +222,7 @@ async function buildServer() {
 
   // ─── Health check ───
   fastify.get('/api/v1/health', async () => {
-    const sources: Record<string, any> = {};
+    const sources: Record<string, { name: string; status: string; lastTick: string | null; tickCount: number }> = {};
     for (const [key, info] of priceEngine.getSourceInfo()) {
       sources[key] = {
         name: info.name,

@@ -25,7 +25,7 @@ export interface AuditEntry {
   actorType: AuditActorType;
   action: string;           // verb-noun, uppercase: DEPOSIT, WITHDRAW, KYC_APPROVE, etc.
   target?: string;          // e.g. "user:uuid", "trade:uuid"
-  details?: Record<string, any>;
+  details?: Record<string, unknown>;
   ip?: string;
 }
 

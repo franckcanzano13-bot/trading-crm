@@ -1,5 +1,4 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { z } from 'zod';
 import { DealerInterventionSchema } from '@tradexlabel/shared';
 import { tenantResolver } from '../../shared/middleware/tenant-resolver';
 import { requireAdmin } from '../../shared/middleware/auth';
@@ -15,7 +14,7 @@ import { audit } from '../../shared/audit';
  * Must run AFTER tenantResolver (needs request.tenantId).
  */
 async function requireDealerMode(request: FastifyRequest, reply: FastifyReply) {
-  const tenantId = (request as any).tenantId;
+  const tenantId = request.tenantId;
   if (!tenantId) {
     return reply.status(400).send({ error: 'Tenant not resolved', code: 'TENANT_REQUIRED' });
   }
@@ -322,11 +321,11 @@ export async function dealerRoutes(fastify: FastifyInstance) {
 
         return newTrade;
       });
-    } catch (err: any) {
-      if (err?.message === 'ACCOUNT_NOT_FOUND') {
+    } catch (err) {
+      if (err instanceof Error && err.message === 'ACCOUNT_NOT_FOUND') {
         return reply.status(404).send({ error: 'Account not found', code: 'ACCOUNT_NOT_FOUND' });
       }
-      if (err?.message === 'INSUFFICIENT_BALANCE') {
+      if (err instanceof Error && err.message === 'INSUFFICIENT_BALANCE') {
         return reply.status(400).send({ error: 'Insufficient available balance', code: 'INSUFFICIENT_BALANCE' });
       }
       throw err;
@@ -492,8 +491,8 @@ export async function dealerRoutes(fastify: FastifyInstance) {
           },
         });
       });
-    } catch (err: any) {
-      if (err?.message === 'TRADE_ALREADY_CLOSED') {
+    } catch (err) {
+      if (err instanceof Error && err.message === 'TRADE_ALREADY_CLOSED') {
         return reply.status(409).send({ error: 'Trade already closed', code: 'ALREADY_CLOSED' });
       }
       throw err;
@@ -541,7 +540,12 @@ export async function dealerRoutes(fastify: FastifyInstance) {
   fastify.patch('/api/v1/dealer/settings', {
     preHandler: [tenantResolver, requireDealerMode, requireAdmin],
   }, async (request, reply) => {
-    const body = request.body as any;
+    const body = (request.body ?? {}) as {
+      max_slippage?: number;
+      requote_enabled?: boolean;
+      spread_multiplier?: number;
+      auto_delay_ms?: number;
+    };
     const settings = await request.tenantQuery!.upsertDealerSettings(request.tenantId!, {
       max_slippage: body.max_slippage,
       requote_enabled: body.requote_enabled,

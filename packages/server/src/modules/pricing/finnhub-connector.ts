@@ -123,8 +123,9 @@ export class FinnhubConnector extends EventEmitter {
         } else if (msg.type === 'ping') {
           // Finnhub sends pings, no action needed
         }
-      } catch (err: any) {
-        logger.warn({ err: err.message }, '[Finnhub] Failed to parse message');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        logger.warn({ err: message }, '[Finnhub] Failed to parse message');
       }
     });
 

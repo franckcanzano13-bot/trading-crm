@@ -106,7 +106,13 @@ export async function tenantRoutes(fastify: FastifyInstance) {
     preHandler: [requireSuperAdmin],
   }, async (request, reply) => {
     const { id } = request.params;
-    const body = request.body as any;
+    const body = (request.body ?? {}) as {
+      name?: string;
+      execution_mode?: string;
+      config?: string;
+      is_active?: boolean;
+      lei?: string;
+    };
 
     // Sprint 6.6: LEI must be ISO 17442-valid (or empty to clear).
     if (body.lei !== undefined && !isValidLei(body.lei)) {
@@ -203,7 +209,14 @@ export async function tenantRoutes(fastify: FastifyInstance) {
   fastify.post('/api/v1/super/plans', {
     preHandler: [requireSuperAdmin],
   }, async (request, reply) => {
-    const body = request.body as any;
+    const body = (request.body ?? {}) as {
+      name: string;
+      description?: string;
+      price_cents?: number;
+      max_users?: number;
+      max_instruments?: number;
+      features?: Record<string, unknown>;
+    };
     const plan = await prisma.plan.create({
       data: {
         name: body.name,
@@ -232,7 +245,11 @@ export async function tenantRoutes(fastify: FastifyInstance) {
   fastify.post('/api/v1/super/subscriptions', {
     preHandler: [requireSuperAdmin],
   }, async (request, reply) => {
-    const body = request.body as any;
+    const body = (request.body ?? {}) as {
+      tenant_id: string;
+      plan_id: string;
+      trial?: boolean;
+    };
     const plan = await prisma.plan.findUnique({ where: { id: body.plan_id } });
     if (!plan) return reply.status(404).send({ error: 'Plan not found', code: 'PLAN_NOT_FOUND' });
 
@@ -304,7 +321,12 @@ export async function tenantRoutes(fastify: FastifyInstance) {
 }
 
 // Audit log helper
-async function auditLog(request: any, action: string, target: string, details: any = {}) {
+async function auditLog(
+  request: { userData?: { sub?: string }; ip?: string },
+  action: string,
+  target: string,
+  details: Record<string, unknown> = {},
+) {
   try {
     const actorId = request.userData?.sub || 'system';
     const ip = request.ip || '';

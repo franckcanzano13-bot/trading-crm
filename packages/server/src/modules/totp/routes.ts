@@ -23,7 +23,7 @@ import crypto from 'crypto';
 import { requireAdmin } from '../../shared/middleware/auth';
 import { prisma } from '../../shared/database/prisma';
 import { encrypt, decrypt, sha256 } from '../../shared/crypto';
-import { audit } from '../../shared/audit';
+import { audit, AuditActorType } from '../../shared/audit';
 
 // Sprint 5.1: backup codes — 8 single-use 10-char alphanumeric codes
 function generateBackupCodes(count = 8): string[] {
@@ -107,7 +107,7 @@ export async function totpRoutes(fastify: FastifyInstance) {
     await audit.log({
       tenantId: admin.tenant_id,
       actorId: admin.id,
-      actorType: (admin.role as any) || 'admin',
+      actorType: (admin.role as AuditActorType) || 'admin',
       action: '2FA_SETUP_INITIATED',
       target: `tenant_admin:${admin.id}`,
       details: { email: admin.email },
@@ -175,7 +175,7 @@ export async function totpRoutes(fastify: FastifyInstance) {
       await audit.log({
         tenantId: admin.tenant_id,
         actorId: admin.id,
-        actorType: (admin.role as any) || 'admin',
+        actorType: (admin.role as AuditActorType) || 'admin',
         action: '2FA_ENABLED',
         target: `tenant_admin:${admin.id}`,
         details: { email: admin.email, backup_codes_count: backupCodes.length },
@@ -221,7 +221,7 @@ export async function totpRoutes(fastify: FastifyInstance) {
     });
 
     await audit.log({
-      tenantId: admin.tenant_id, actorId: admin.id, actorType: (admin.role as any) || 'admin',
+      tenantId: admin.tenant_id, actorId: admin.id, actorType: (admin.role as 'superadmin' | 'admin' | 'dealer' | 'seller' | 'retention' | 'trader' | 'system') || 'admin',
       action: '2FA_BACKUP_CODES_REGENERATED', target: `tenant_admin:${admin.id}`,
       details: { email: admin.email }, ip: request.ip,
     });
@@ -268,7 +268,7 @@ export async function totpRoutes(fastify: FastifyInstance) {
     await audit.log({
       tenantId: admin.tenant_id,
       actorId: admin.id,
-      actorType: (admin.role as any) || 'admin',
+      actorType: (admin.role as AuditActorType) || 'admin',
       action: '2FA_DISABLED',
       target: `tenant_admin:${admin.id}`,
       details: { email: admin.email },

@@ -2,7 +2,6 @@ import { FastifyInstance } from 'fastify';
 import { config } from '../../config/index';
 import { logger } from '../../shared/utils/index';
 import { priceEngine } from './price-engine';
-import { getCurrentPrice } from './price-store';
 
 /**
  * GET /api/v1/candles?symbol=BTCUSD&timeframe=1h&limit=500
@@ -87,8 +86,8 @@ async function fetchBinanceCandles(symbol: string, timeframe: string, limit: num
   const res = await fetch(url);
   if (!res.ok) { logger.error(`[Candles] Binance error: ${res.status}`); return []; }
 
-  const data = await res.json() as any[];
-  return data.map((k: any) => ({
+  const data = await res.json() as Array<[number, string, string, string, string, string, ...unknown[]]>;
+  return data.map((k) => ({
     time: Math.floor(k[0] / 1000),
     open: parseFloat(k[1]),
     high: parseFloat(k[2]),
@@ -113,20 +112,27 @@ async function fetchYahooCandles(symbol: string, timeframe: string, limit: numbe
   const res = await fetch(url);
   if (!res.ok) { logger.error(`[Candles] Yahoo error: ${res.status}`); return []; }
 
-  const data = await res.json() as any;
+  const data = await res.json() as {
+    chart?: {
+      result?: Array<{
+        timestamp?: number[];
+        indicators?: { quote?: Array<{ open: (number | null)[]; high: (number | null)[]; low: (number | null)[]; close: (number | null)[]; volume: (number | null)[] }> };
+      }>;
+    };
+  };
   const result = data?.chart?.result?.[0];
   if (!result?.timestamp || !result?.indicators?.quote?.[0]) {
     logger.warn(`[Candles] Yahoo no data for ${yahooSymbol}`);
     return [];
   }
 
-  const timestamps = result.timestamp as number[];
+  const timestamps = result.timestamp;
   const quote = result.indicators.quote[0];
-  const opens = quote.open as (number | null)[];
-  const highs = quote.high as (number | null)[];
-  const lows = quote.low as (number | null)[];
-  const closes = quote.close as (number | null)[];
-  const volumes = quote.volume as (number | null)[];
+  const opens = quote.open;
+  const highs = quote.high;
+  const lows = quote.low;
+  const closes = quote.close;
+  const volumes = quote.volume;
 
   let candles: CandleData[] = [];
   for (let i = 0; i < timestamps.length; i++) {
@@ -195,8 +201,8 @@ async function fetchFinnhubCandles(symbol: string, timeframe: string, limit: num
   const res = await fetch(url);
   if (!res.ok) { logger.error(`[Candles] Finnhub error: ${res.status}`); return []; }
 
-  const data = await res.json() as any;
-  if (data.s !== 'ok' || !data.t) {
+  const data = await res.json() as { s?: string; t?: number[]; o?: number[]; h?: number[]; l?: number[]; c?: number[]; v?: number[] };
+  if (data.s !== 'ok' || !data.t || !data.o || !data.h || !data.l || !data.c) {
     logger.warn(`[Candles] Finnhub no data for ${fhSymbol}: ${data.s || 'no-data'}`);
     return [];
   }
@@ -233,13 +239,17 @@ async function fetchTwelveDataCandles(symbol: string, timeframe: string, limit: 
   const res = await fetch(url);
   if (!res.ok) { logger.error(`[Candles] TwelveData error: ${res.status}`); return []; }
 
-  const data = await res.json() as any;
+  const data = await res.json() as {
+    status?: string;
+    message?: string;
+    values?: Array<{ datetime: string; open: string; high: string; low: string; close: string; volume?: string }>;
+  };
   if (data.status === 'error' || !data.values) {
     logger.warn(`[Candles] TwelveData no data: ${data.message || 'unknown'}`);
     return [];
   }
 
-  return data.values.reverse().map((v: any) => ({
+  return data.values.reverse().map((v) => ({
     time: Math.floor(new Date(v.datetime).getTime() / 1000),
     open: parseFloat(v.open),
     high: parseFloat(v.high),
@@ -276,8 +286,9 @@ export async function candlesRoute(fastify: FastifyInstance) {
           candles = await fetchTwelveDataCandles(symbol, timeframe, limit);
         }
       }
-    } catch (err: any) {
-      logger.error(`[Candles] Fetch error for ${symbol}: ${err.message}`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error(`[Candles] Fetch error for ${symbol}: ${message}`);
     }
 
     // Fallback: use candles built from live ticks (price engine history)

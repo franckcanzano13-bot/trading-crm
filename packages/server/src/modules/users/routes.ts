@@ -68,7 +68,12 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
   fastify.patch<{ Params: { id: string } }>('/api/v1/admin/instruments/:id', {
     preHandler: [tenantResolver, requireAdmin],
   }, async (request, reply) => {
-    const body = request.body as any;
+    const body = (request.body ?? {}) as {
+      spread_markup?: number;
+      is_active?: boolean;
+      min_volume?: number;
+      max_volume?: number;
+    };
     const instrument = await request.tenantQuery!.updateInstrument(request.params.id, {
       spread_markup: body.spread_markup,
       is_active: body.is_active,
@@ -124,8 +129,8 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
 
         return safeBalance;
       });
-    } catch (err: any) {
-      if (err?.message === 'ACCOUNT_NOT_FOUND') {
+    } catch (err) {
+      if (err instanceof Error && err.message === 'ACCOUNT_NOT_FOUND') {
         return reply.status(404).send({ error: 'Account not found', code: 'ACCOUNT_NOT_FOUND' });
       }
       throw err;
@@ -193,11 +198,11 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
 
         return safeBalance;
       });
-    } catch (err: any) {
-      if (err?.message === 'ACCOUNT_NOT_FOUND') {
+    } catch (err) {
+      if (err instanceof Error && err.message === 'ACCOUNT_NOT_FOUND') {
         return reply.status(404).send({ error: 'Account not found', code: 'ACCOUNT_NOT_FOUND' });
       }
-      if (err?.message === 'INSUFFICIENT_BALANCE') {
+      if (err instanceof Error && err.message === 'INSUFFICIENT_BALANCE') {
         return reply.status(400).send({ error: 'Insufficient balance', code: 'INSUFFICIENT_BALANCE' });
       }
       throw err;

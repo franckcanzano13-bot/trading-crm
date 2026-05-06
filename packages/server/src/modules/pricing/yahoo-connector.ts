@@ -88,14 +88,16 @@ export class YahooConnector extends EventEmitter {
 
         if (!res.ok) continue;
 
-        const data = await res.json() as any;
+        const data = await res.json() as {
+          chart?: { result?: Array<{ meta?: { regularMarketPrice?: number } }> };
+        };
         const result = data?.chart?.result?.[0];
         if (!result?.meta?.regularMarketPrice) continue;
 
         const price = result.meta.regularMarketPrice;
         this.emitTick(symbol, price);
-      } catch (err: any) {
-        if (err.name !== 'AbortError') {
+      } catch (err) {
+        if (err instanceof Error && err.name !== 'AbortError') {
           logger.warn(`[Yahoo] Error fetching ${symbol}: ${err.message}`);
         }
       }

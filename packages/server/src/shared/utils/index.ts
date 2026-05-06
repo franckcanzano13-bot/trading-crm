@@ -123,14 +123,14 @@ export function isValidLei(lei: string): boolean {
 /**
  * Serialize BigInt values in an object to strings for JSON.
  */
-export function serializeBigInt(obj: any): any {
+export function serializeBigInt(obj: unknown): unknown {
   if (obj === null || obj === undefined) return obj;
   if (typeof obj === 'bigint') return obj.toString();
   if (obj instanceof Date) return obj.toISOString();
   if (Array.isArray(obj)) return obj.map(serializeBigInt);
   if (typeof obj === 'object') {
-    const result: any = {};
-    for (const [key, value] of Object.entries(obj)) {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
       result[key] = serializeBigInt(value);
     }
     return result;

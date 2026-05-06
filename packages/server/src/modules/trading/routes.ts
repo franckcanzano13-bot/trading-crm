@@ -83,9 +83,10 @@ export async function tradingRoutes(fastify: FastifyInstance) {
 
       logger.info({ userId, symbol: parsed.data.symbol, side: parsed.data.side, volume: parsed.data.volume }, 'Order executed');
       return reply.status(201).send({ data: serializeBigInt(result) });
-    } catch (err: any) {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unknown error';
       logger.error({ err, userId, symbol: parsed.data.symbol }, 'Order execution failed');
-      return reply.status(400).send({ error: err.message, code: 'EXECUTION_ERROR' });
+      return reply.status(400).send({ error: message, code: 'EXECUTION_ERROR' });
     }
   });
 
@@ -183,8 +184,8 @@ export async function tradingRoutes(fastify: FastifyInstance) {
 
         return tx.trade.findUnique({ where: { id: trade.id } });
       });
-    } catch (err: any) {
-      if (err?.message === 'TRADE_ALREADY_CLOSED') {
+    } catch (err) {
+      if (err instanceof Error && err.message === 'TRADE_ALREADY_CLOSED') {
         return reply.status(409).send({ error: 'Position already closed', code: 'ALREADY_CLOSED' });
       }
       throw err;
@@ -311,7 +312,7 @@ export async function tradingRoutes(fastify: FastifyInstance) {
       tenantId: request.tenantId!, actorId: request.userData!.sub, actorType: 'trader',
       action: 'TRAILING_STOP_UPDATE', target: `trade:${trade.id}`,
       details: {
-        previous_distance: (trade as any).trailing_stop_distance ?? null,
+        previous_distance: trade.trailing_stop_distance ?? null,
         new_distance: distance,
         anchor_price: distance === null ? null : openPriceFloat,
       },

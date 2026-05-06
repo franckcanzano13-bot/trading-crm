@@ -73,10 +73,6 @@ export class ForexConnector extends EventEmitter {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 8000);
 
-      const bases = ['EUR', 'GBP', 'AUD', 'NZD', 'USD'];
-      const quotes = ['USD', 'JPY', 'CHF', 'CAD', 'GBP', 'EUR'];
-      const uniqueQuotes = [...new Set(quotes)].join(',');
-
       // Fetch EUR-based rates (covers EUR/USD, EUR/GBP)
       const eurRes = await fetch(
         `https://api.frankfurter.app/latest?from=EUR&to=USD,GBP,JPY,CHF`,
@@ -154,8 +150,8 @@ export class ForexConnector extends EventEmitter {
 
       this.connected = true;
       this.emit('connected');
-    } catch (err: any) {
-      if (err.name !== 'AbortError') {
+    } catch (err) {
+      if (err instanceof Error && err.name !== 'AbortError') {
         logger.warn({ err: err.message }, '[Forex] Fetch error');
       }
       this.connected = false;

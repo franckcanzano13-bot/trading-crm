@@ -101,11 +101,11 @@ export class TwelveDataConnector extends EventEmitter {
         return;
       }
 
-      const data = await res.json() as Record<string, any>;
+      const data = await res.json() as Record<string, unknown>;
 
       // Single symbol returns { price: "123.45" }
       // Multiple symbols returns { "SPX": { price: "5200.50" }, "NDX": { price: "18100.00" }, ... }
-      if (data.price && this.symbols.length === 1) {
+      if (typeof data.price === 'string' && this.symbols.length === 1) {
         // Single symbol response
         const symbol = this.symbols[0];
         this.emitTick(symbol, Number(data.price));
@@ -114,15 +114,17 @@ export class TwelveDataConnector extends EventEmitter {
         for (const [tdSymbol, value] of Object.entries(data)) {
           const internal = TD_TO_INTERNAL[tdSymbol];
           if (internal && value && typeof value === 'object' && 'price' in value) {
-            this.emitTick(internal, Number((value as any).price));
+            this.emitTick(internal, Number((value as { price: string | number }).price));
           }
         }
       }
-    } catch (err: any) {
-      if (err.name === 'AbortError') {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const name = err instanceof Error ? err.name : '';
+      if (name === 'AbortError') {
         logger.warn('[TwelveData] Request timeout');
       } else {
-        logger.warn({ err: err.message }, '[TwelveData] Fetch error');
+        logger.warn({ err: message }, '[TwelveData] Fetch error');
       }
       this.connected = false;
       this.emit('error', err);

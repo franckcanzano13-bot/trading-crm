@@ -6,6 +6,7 @@ import { requireAuth } from '../../shared/middleware/auth';
 import { serializeBigInt, logger, priceToInt, calculateMarginCents } from '../../shared/utils/index';
 import { executeOrder } from './engine';
 import { prisma } from '../../shared/database/prisma';
+import { audit } from '../../shared/audit';
 
 const UpdateSLTPSchema = z.object({
   stop_loss: z.number().positive().nullable().optional(),
@@ -170,6 +171,20 @@ export async function tradingRoutes(fastify: FastifyInstance) {
     }
 
     logger.info({ tradeId: trade.id, pnl: pnlCents.toString() }, 'Position closed');
+
+    // Sprint 4.4: audit trader-initiated close (financial event, MiFID II)
+    await audit.log({
+      tenantId: request.tenantId!, actorId: request.userData!.sub, actorType: 'trader',
+      action: 'POSITION_CLOSE',
+      target: `trade:${trade.id}`,
+      details: {
+        symbol: trade.symbol, side: trade.side, volume: trade.volume,
+        open_price: trade.open_price?.toString(), close_price: closePriceInt.toString(),
+        pnl_cents: pnlCents.toString(),
+      },
+      ip: request.ip,
+    });
+
     return reply.send({ data: serializeBigInt(closedTrade) });
   });
 
@@ -221,6 +236,18 @@ export async function tradingRoutes(fastify: FastifyInstance) {
 
     const updated = await tq.updateTradeSLTP(trade.id, sl ?? null, tp ?? null);
     logger.info({ tradeId: trade.id, sl, tp }, 'SL/TP updated');
+
+    // Sprint 4.4: audit SL/TP modifications
+    await audit.log({
+      tenantId: request.tenantId!, actorId: request.userData!.sub, actorType: 'trader',
+      action: 'SLTP_UPDATE', target: `trade:${trade.id}`,
+      details: {
+        previous_sl: trade.stop_loss, previous_tp: trade.take_profit,
+        new_sl: sl ?? null, new_tp: tp ?? null,
+      },
+      ip: request.ip,
+    });
+
     return reply.send({ data: serializeBigInt(updated) });
   });
 

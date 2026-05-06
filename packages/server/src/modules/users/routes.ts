@@ -395,11 +395,14 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
     });
 
     if (!superadmin) {
+      // Sprint 4.4: audit failed superadmin login (high-value target)
+      await audit.log({ actorId: 'unknown', actorType: 'superadmin', action: 'LOGIN_FAILED', details: { email, reason: 'user_not_found' }, ip: request.ip });
       return reply.status(401).send({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
     }
 
     const valid = await bcrypt.compare(password, superadmin.password_hash);
     if (!valid) {
+      await audit.log({ actorId: superadmin.id, actorType: 'superadmin', action: 'LOGIN_FAILED', details: { email, reason: 'wrong_password' }, ip: request.ip });
       return reply.status(401).send({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
     }
 
@@ -411,6 +414,9 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
       { sub: superadmin.id, email: superadmin.email, role: 'superadmin' },
       { expiresIn: '7d' }
     );
+
+    // Sprint 4.4: audit successful superadmin login
+    await audit.log({ actorId: superadmin.id, actorType: 'superadmin', action: 'LOGIN_SUCCESS', details: { email }, ip: request.ip });
 
     return reply.send({
       data: {

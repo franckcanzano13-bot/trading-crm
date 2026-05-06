@@ -1,6 +1,7 @@
 import { prisma } from '../../shared/database/prisma';
 import { getCurrentPrice, getPriceMap } from '../pricing/price-store';
 import { logger, priceToInt, calculateMarginCents } from '../../shared/utils/index';
+import { audit } from '../../shared/audit';
 
 /**
  * Position Monitor — Background loop that checks all open positions against live prices.
@@ -440,6 +441,20 @@ async function closeTradeAtPrice(
     closePrice,
     pnl: pnlCents.toString(),
   }, `[PositionMonitor] Position closed — ${reason}`);
+
+  // Sprint 4.4: audit system-triggered closes (SL, TP, LIQUIDATION)
+  if (result.closed) {
+    await audit.log({
+      tenantId: trade.tenant_id, actorId: 'system', actorType: 'system',
+      action: `POSITION_${reason}`, target: `trade:${trade.id}`,
+      details: {
+        user_id: trade.user_id, account_id: accountId,
+        symbol: trade.instrument?.symbol, side: trade.side, volume: trade.volume,
+        open_price: trade.open_price?.toString(), close_price: closePriceInt.toString(),
+        pnl_cents: pnlCents.toString(),
+      },
+    });
+  }
 
   return result;
 }

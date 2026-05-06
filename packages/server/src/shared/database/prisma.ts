@@ -9,12 +9,14 @@ const baseClient =
   });
 
 /**
- * Sprint 5.2 — audit_logs is append-only. We forbid UPDATE / DELETE / upsert
- * on AuditLog at the Prisma client level. This is defense-in-depth — a real
- * production hardening would also revoke UPDATE/DELETE on the table at the
- * Postgres role level (or use a trigger that raises EXCEPTION).
+ * Sprint 5.2 / 6.5 — audit_logs is append-only. Layered defense:
+ *   1. Prisma client extension below throws loudly on update/delete/upsert.
+ *   2. The 20260506000100_audit_logs_append_only migration installs Postgres
+ *      INSTEAD-OF-NOTHING rules so even raw `$queryRawUnsafe('UPDATE
+ *      audit_logs ...')` or external psql sessions silently no-op instead
+ *      of mutating the table. TRUNCATE is also revoked from PUBLIC.
  *
- * Reads, finds, counts, and creates remain allowed.
+ * Reads, finds, counts, and creates remain allowed at both layers.
  */
 export const prisma = baseClient.$extends({
   query: {

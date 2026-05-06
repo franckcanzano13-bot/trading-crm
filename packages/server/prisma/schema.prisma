@@ -15,6 +15,11 @@ model Tenant {
   domain         String   @unique
   slug           String   @unique
   execution_mode String   @default("B_BOOK")
+  // Sprint 6.6: ISO 17442 Legal Entity Identifier. 20-character alphanumeric.
+  // Required for MiFIR/EMIR transaction reporting in EU/UK. Empty for non-
+  // regulated tenants (sandbox, offshore). Validated at write time via
+  // shared/utils.isValidLei().
+  lei            String   @default("")
   config         String   @default("{}")
   is_active      Boolean  @default(true)
   created_at     DateTime @default(now())

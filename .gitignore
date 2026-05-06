@@ -11,7 +11,6 @@ coverage/
 prisma/*.db
 **/prisma/*.db
 **/prisma/*.db-journal
-prisma/migrations/**/migration_lock.toml
 *.png
 .claude/plugins/superpowers/
 .claude/settings.local.json

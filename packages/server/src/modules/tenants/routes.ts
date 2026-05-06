@@ -5,7 +5,7 @@ import { prisma, createTenantSchema } from '../../shared/database/prisma';
 import { requireSuperAdmin } from '../../shared/middleware/auth';
 import { BCRYPT_SALT_ROUNDS, ALL_INSTRUMENTS } from '@tradexlabel/shared';
 import { TenantQuery } from '../../shared/database/tenant-queries';
-import { logger } from '../../shared/utils/index';
+import { logger, isValidLei } from '../../shared/utils/index';
 
 const CreateTenantSchema = z.object({
   name: z.string().min(1),
@@ -108,6 +108,14 @@ export async function tenantRoutes(fastify: FastifyInstance) {
     const { id } = request.params;
     const body = request.body as any;
 
+    // Sprint 6.6: LEI must be ISO 17442-valid (or empty to clear).
+    if (body.lei !== undefined && !isValidLei(body.lei)) {
+      return reply.status(400).send({
+        error: 'LEI must be 20-char ISO 17442 with valid mod-97 checksum, or empty',
+        code: 'INVALID_LEI',
+      });
+    }
+
     const tenant = await prisma.tenant.update({
       where: { id },
       data: {
@@ -115,6 +123,7 @@ export async function tenantRoutes(fastify: FastifyInstance) {
         execution_mode: body.execution_mode,
         config: body.config,
         is_active: body.is_active,
+        ...(body.lei !== undefined && { lei: body.lei }),
       },
     });
 

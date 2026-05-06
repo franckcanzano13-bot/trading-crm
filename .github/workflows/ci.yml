@@ -52,18 +52,23 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate
 
-      - name: Push schema to PostgreSQL
-        run: npx prisma db push --skip-generate
+      - name: Apply migrations to PostgreSQL
+        run: npx prisma migrate deploy
 
       - name: TypeScript typecheck
         run: npx tsc --noEmit
 
-      - name: ESLint (informational)
-        run: npx eslint 'src/**/*.ts' --max-warnings=999 || true
+      # Sprint 6.3: ESLint is now a real gate. Budget shrinks each sprint:
+      # 50 → 25 → 10 → 0. Increase only with a comment explaining why.
+      - name: ESLint
+        run: npx eslint 'src/**/*.ts' --max-warnings=50
 
-      - name: npm audit (server)
+      # Sprint 6.3: npm audit gates on high+ severity. Drop the `|| true` so
+      # known CVEs in production deps actually fail the build. Use
+      # `npm audit --omit=dev` so dev-only tooling doesn't block.
+      - name: npm audit (server prod deps)
         working-directory: .
-        run: npm audit --omit=dev --audit-level=high || true
+        run: npm audit --omit=dev --audit-level=high
 
       - name: Vitest
         run: npx vitest run

@@ -15,6 +15,7 @@ import { priceEngine } from './modules/pricing/price-engine';
 import { setupWebSocketServer } from './shared/websocket/ws-server';
 import { startPositionMonitor } from './modules/trading/position-monitor';
 import { assertProductionKey } from './shared/crypto';
+import { timingSafeEqual } from 'crypto';
 
 // Route imports
 import { authRoutes } from './modules/auth/routes';
@@ -157,8 +158,13 @@ async function buildServer() {
     if (expected) {
       const auth = request.headers.authorization || '';
       const provided = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-      // constant-time-ish compare: use crypto.timingSafeEqual when both buffers have equal length
-      const match = provided.length === expected.length && provided === expected;
+      // Sprint 6.4: constant-time compare via crypto.timingSafeEqual. The
+      // length-equality short-circuit is fine — token length is not a secret
+      // (it's a server-config constant), and timingSafeEqual would throw on
+      // mismatched buffer lengths.
+      const a = Buffer.from(provided, 'utf8');
+      const b = Buffer.from(expected, 'utf8');
+      const match = a.length === b.length && timingSafeEqual(a, b);
       if (!match) {
         reply.code(401).send({ error: 'metrics auth required', code: 'METRICS_AUTH' });
         return;

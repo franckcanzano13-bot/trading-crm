@@ -15,6 +15,7 @@ decisions get a new ADR that references the old one.
 | 005 | TOTP-only 2FA (no SMS)                   | Accepted   |
 | 006 | No useCallback in CRM page (MetaMask SES)| Accepted   |
 | 007 | MiFIR/EMIR trade-export format           | Accepted   |
+| 008 | Versioned migrations + DB audit guards   | Accepted   |
 
 ## Template
 

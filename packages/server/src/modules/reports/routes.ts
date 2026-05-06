@@ -17,7 +17,7 @@ import { tenantResolver } from '../../shared/middleware/tenant-resolver';
 import { requireAdmin } from '../../shared/middleware/auth';
 import { prisma } from '../../shared/database/prisma';
 import { audit } from '../../shared/audit';
-import { logger } from '../../shared/utils/index';
+import { logger, isValidLei } from '../../shared/utils/index';
 import { buildMifirCsv, buildMifirJson, MifirTradeRow } from './mifir-export';
 
 const QuerySchema = z.object({
@@ -27,6 +27,19 @@ const QuerySchema = z.object({
 
 const MAX_DAYS = 366;
 const MAX_ROWS = 50_000;
+
+/**
+ * Sprint 6.6 — Resolve the tenant's LEI for the export. Real LEI when set
+ * and valid; otherwise fall back to a non-LEI placeholder (`SLUG:<slug>`)
+ * that downstream reporting partners will reject — better than silently
+ * emitting an invalid LEI that looks real. Returns `[lei, isReal]`.
+ */
+async function resolveExecutingLei(tenantId: string, slug: string): Promise<[string, boolean]> {
+  const t = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { lei: true } });
+  const lei = (t?.lei ?? '').trim();
+  if (lei && isValidLei(lei)) return [lei, true];
+  return [`SLUG:${slug}`, false];
+}
 
 async function fetchRows(tenantId: string, from: Date, to: Date) {
   const trades = await prisma.trade.findMany({
@@ -90,23 +103,30 @@ export async function reportsRoutes(fastify: FastifyInstance) {
         });
       }
 
-      const lei = request.tenantSlug || request.tenantId!;
+      const [lei, isRealLei] = await resolveExecutingLei(request.tenantId!, request.tenantSlug!);
       const body = buildMifirCsv(rows, lei);
 
       await audit.log({
         tenantId: request.tenantId!, actorId: request.userData!.sub, actorType: 'admin',
         action: 'REGULATORY_EXPORT',
         target: `mifir:${parsed.data.from}_${parsed.data.to}`,
-        details: { format: 'csv', from: parsed.data.from, to: parsed.data.to, row_count: rows.length },
+        details: {
+          format: 'csv', from: parsed.data.from, to: parsed.data.to,
+          row_count: rows.length, executing_lei: lei, lei_is_real: isRealLei,
+        },
         ip: request.ip,
       });
-      logger.info({ tenantId: request.tenantId, rows: rows.length, range: parsed.data }, 'MiFIR CSV exported');
+      logger.info({ tenantId: request.tenantId, rows: rows.length, lei, isRealLei, range: parsed.data }, 'MiFIR CSV exported');
 
-      const filename = `mifir_${lei}_${parsed.data.from}_${parsed.data.to}.csv`;
+      // Sanitize LEI for the filename — slug fallback contains ':' which is
+      // unsafe in some filesystems. The CSV body is unaffected.
+      const safeLei = lei.replace(/[^A-Za-z0-9_-]/g, '_');
+      const filename = `mifir_${safeLei}_${parsed.data.from}_${parsed.data.to}.csv`;
       reply
         .header('Content-Type', 'text/csv; charset=utf-8')
-        .header('Content-Disposition', `attachment; filename="${filename}"`)
-        .send(body);
+        .header('Content-Disposition', `attachment; filename="${filename}"`);
+      if (!isRealLei) reply.header('X-MiFIR-LEI-Warning', 'tenant has no valid ISO 17442 LEI; placeholder used');
+      return reply.send(body);
     },
   );
 
@@ -131,18 +151,28 @@ export async function reportsRoutes(fastify: FastifyInstance) {
         });
       }
 
-      const lei = request.tenantSlug || request.tenantId!;
+      const [lei, isRealLei] = await resolveExecutingLei(request.tenantId!, request.tenantSlug!);
       const data = buildMifirJson(rows, lei);
 
       await audit.log({
         tenantId: request.tenantId!, actorId: request.userData!.sub, actorType: 'admin',
         action: 'REGULATORY_EXPORT',
         target: `mifir:${parsed.data.from}_${parsed.data.to}`,
-        details: { format: 'json', from: parsed.data.from, to: parsed.data.to, row_count: rows.length },
+        details: {
+          format: 'json', from: parsed.data.from, to: parsed.data.to,
+          row_count: rows.length, executing_lei: lei, lei_is_real: isRealLei,
+        },
         ip: request.ip,
       });
 
-      return reply.send({ executing_lei: lei, from: parsed.data.from, to: parsed.data.to, count: rows.length, data });
+      return reply.send({
+        executing_lei: lei,
+        lei_is_real: isRealLei,
+        from: parsed.data.from,
+        to: parsed.data.to,
+        count: rows.length,
+        data,
+      });
     },
   );
 }

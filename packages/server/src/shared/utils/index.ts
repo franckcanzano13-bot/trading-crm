@@ -98,6 +98,29 @@ export function randomPrice(base: number, spread: number): { bid: number; ask: n
 }
 
 /**
+ * Sprint 6.6 — ISO 17442 Legal Entity Identifier validation.
+ *
+ * 20 alphanumeric characters: 4-char LOU prefix, 2 reserved zeros,
+ * 12-char entity body, 2-char ISO 7064 mod 97-10 check digits.
+ *
+ * We validate the format and the mod-97 checksum. Returns true for the
+ * empty string (LEI is optional for non-regulated tenants).
+ */
+export function isValidLei(lei: string): boolean {
+  if (lei === '') return true;
+  if (!/^[A-Z0-9]{18}[0-9]{2}$/.test(lei)) return false;
+  // ISO 7064 mod 97-10: convert each letter A-Z to its number value
+  // (A=10, B=11, ..., Z=35) and treat the result as a giant integer mod 97.
+  let acc = 0n;
+  for (const ch of lei) {
+    const code = ch.charCodeAt(0);
+    const v = code >= 65 ? code - 55 : code - 48; // 'A' -> 10, '0' -> 0
+    acc = (acc * (v >= 10 ? 100n : 10n) + BigInt(v)) % 97n;
+  }
+  return acc === 1n;
+}
+
+/**
  * Serialize BigInt values in an object to strings for JSON.
  */
 export function serializeBigInt(obj: any): any {

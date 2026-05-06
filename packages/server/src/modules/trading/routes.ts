@@ -13,6 +13,26 @@ const UpdateSLTPSchema = z.object({
   take_profit: z.number().positive().nullable().optional(),
 });
 
+// Sprint 5.4: trailing stop distance is a price-unit distance (not pips).
+// null disables trailing.
+const UpdateTrailingStopSchema = z.object({
+  distance: z.number().positive().nullable(),
+});
+
+// Sprint 5.4: OCO (One-Cancels-the-Other). Creates two PENDING orders
+// sharing a generated oco_group_id. When one fills, the sibling is cancelled.
+const OcoLegSchema = z.object({
+  type: z.enum(['LIMIT', 'STOP']),
+  price: z.number().positive(),
+});
+const CreateOcoSchema = z.object({
+  symbol: z.string().min(1),
+  side: z.enum(['BUY', 'SELL']),
+  volume: z.number().positive().max(100),
+  primary: OcoLegSchema,
+  secondary: OcoLegSchema,
+});
+
 export async function tradingRoutes(fastify: FastifyInstance) {
   // Place an order
   fastify.post('/api/v1/orders', {
@@ -249,6 +269,133 @@ export async function tradingRoutes(fastify: FastifyInstance) {
     });
 
     return reply.send({ data: serializeBigInt(updated) });
+  });
+
+  // Sprint 5.4: set/clear trailing stop on an open position
+  fastify.patch<{ Params: { id: string } }>('/api/v1/positions/:id/trailing-stop', {
+    preHandler: [tenantResolver, requireAuth],
+  }, async (request, reply) => {
+    const parsed = UpdateTrailingStopSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Validation failed', code: 'VALIDATION_ERROR', details: parsed.error.flatten() });
+    }
+
+    const tq = request.tenantQuery!;
+    const trade = await tq.findTradeById(request.params.id);
+
+    if (!trade || trade.status !== 'OPEN') {
+      return reply.status(404).send({ error: 'Open position not found', code: 'POSITION_NOT_FOUND' });
+    }
+    if (trade.user_id !== request.userData!.sub) {
+      return reply.status(403).send({ error: 'Not your position', code: 'FORBIDDEN' });
+    }
+
+    const distance = parsed.data.distance;
+    // Initialize trailing_stop_high to current open price when activating.
+    // Clear both fields on disable.
+    const openPriceFloat = Number(trade.open_price) / 100000;
+    const result = await prisma.trade.updateMany({
+      where: { id: trade.id, tenant_id: request.tenantId!, status: 'OPEN' },
+      data: {
+        trailing_stop_distance: distance,
+        trailing_stop_high: distance === null ? null : openPriceFloat,
+      },
+    });
+    if (result.count === 0) {
+      return reply.status(404).send({ error: 'Open position not found', code: 'POSITION_NOT_FOUND' });
+    }
+
+    logger.info({ tradeId: trade.id, distance }, 'Trailing stop updated');
+
+    await audit.log({
+      tenantId: request.tenantId!, actorId: request.userData!.sub, actorType: 'trader',
+      action: 'TRAILING_STOP_UPDATE', target: `trade:${trade.id}`,
+      details: {
+        previous_distance: (trade as any).trailing_stop_distance ?? null,
+        new_distance: distance,
+        anchor_price: distance === null ? null : openPriceFloat,
+      },
+      ip: request.ip,
+    });
+
+    const updated = await prisma.trade.findUnique({ where: { id: trade.id } });
+    return reply.send({ data: serializeBigInt(updated) });
+  });
+
+  // Sprint 5.4: create an OCO pair — two PENDING orders sharing oco_group_id.
+  fastify.post('/api/v1/orders/oco', {
+    preHandler: [tenantResolver, requireAuth],
+  }, async (request, reply) => {
+    const parsed = CreateOcoSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Validation failed', code: 'VALIDATION_ERROR', details: parsed.error.flatten() });
+    }
+
+    const tq = request.tenantQuery!;
+    const userId = request.userData!.sub;
+    const tenantId = request.tenantId!;
+
+    const instrument = await tq.findInstrumentBySymbol(parsed.data.symbol);
+    if (!instrument || !instrument.is_active) {
+      return reply.status(404).send({ error: 'Instrument not found or inactive', code: 'INSTRUMENT_NOT_FOUND' });
+    }
+
+    if (parsed.data.volume < instrument.min_volume || parsed.data.volume > instrument.max_volume) {
+      return reply.status(400).send({
+        error: `Volume must be between ${instrument.min_volume} and ${instrument.max_volume}`,
+        code: 'INVALID_VOLUME',
+      });
+    }
+
+    const account = await tq.findAccountByUserId(userId);
+    if (!account) {
+      return reply.status(400).send({ error: 'No trading account', code: 'NO_ACCOUNT' });
+    }
+
+    // Generate a shared group id. Two PENDING orders are created atomically.
+    const ocoGroupId = (globalThis.crypto?.randomUUID?.() ?? require('crypto').randomUUID()) as string;
+
+    const [primary, secondary] = await prisma.$transaction([
+      prisma.order.create({
+        data: {
+          tenant_id: tenantId,
+          user_id: userId,
+          instrument_id: instrument.id,
+          type: parsed.data.primary.type,
+          side: parsed.data.side,
+          volume: parsed.data.volume,
+          price: priceToInt(parsed.data.primary.price, 5),
+          oco_group_id: ocoGroupId,
+        },
+      }),
+      prisma.order.create({
+        data: {
+          tenant_id: tenantId,
+          user_id: userId,
+          instrument_id: instrument.id,
+          type: parsed.data.secondary.type,
+          side: parsed.data.side,
+          volume: parsed.data.volume,
+          price: priceToInt(parsed.data.secondary.price, 5),
+          oco_group_id: ocoGroupId,
+        },
+      }),
+    ]);
+
+    logger.info({ ocoGroupId, primary: primary.id, secondary: secondary.id, symbol: instrument.symbol }, 'OCO pair created');
+
+    await audit.log({
+      tenantId, actorId: userId, actorType: 'trader',
+      action: 'OCO_CREATE', target: `oco:${ocoGroupId}`,
+      details: {
+        symbol: instrument.symbol, side: parsed.data.side, volume: parsed.data.volume,
+        primary: { id: primary.id, type: parsed.data.primary.type, price: parsed.data.primary.price },
+        secondary: { id: secondary.id, type: parsed.data.secondary.type, price: parsed.data.secondary.price },
+      },
+      ip: request.ip,
+    });
+
+    return reply.status(201).send({ data: serializeBigInt({ oco_group_id: ocoGroupId, primary, secondary }) });
   });
 
   // Trade history

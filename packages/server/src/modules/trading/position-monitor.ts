@@ -38,6 +38,7 @@ async function monitorLoop() {
   try {
     await Promise.all([
       checkStopLossTakeProfit(),
+      checkTrailingStops(),
       checkPendingOrders(),
       checkMarginCalls(),
       checkDealerPnlTargets(),
@@ -104,6 +105,98 @@ async function checkStopLossTakeProfit() {
   }
 }
 
+// ─── 1b. Sprint 5.4 — Trailing Stop ───
+
+/**
+ * Pure decision function for a trailing stop.
+ * Given the trade side, current price, distance, and the recorded
+ * favorable extreme, returns the new extreme and whether the trade
+ * should close.
+ *
+ * BUY:  trail_high = max(prev, currentPrice). effective SL = trail_high - distance.
+ *        Close if currentPrice <= effective SL.
+ * SELL: trail_low  = min(prev, currentPrice). effective SL = trail_low + distance.
+ *        Close if currentPrice >= effective SL.
+ *
+ * Exported for unit-testing in isolation from the DB layer.
+ */
+export function evaluateTrailingStop(params: {
+  side: 'BUY' | 'SELL';
+  currentPrice: number;
+  distance: number;
+  trailingHigh: number; // for BUY: highest seen; for SELL: lowest seen
+}): { newTrailingHigh: number; shouldClose: boolean; effectiveStop: number } {
+  const { side, currentPrice, distance, trailingHigh } = params;
+
+  if (side === 'BUY') {
+    const newTrailingHigh = currentPrice > trailingHigh ? currentPrice : trailingHigh;
+    const effectiveStop = newTrailingHigh - distance;
+    const shouldClose = currentPrice <= effectiveStop;
+    return { newTrailingHigh, shouldClose, effectiveStop };
+  }
+
+  // SELL: trailingHigh actually stores the lowest price seen since open
+  const newTrailingHigh = currentPrice < trailingHigh ? currentPrice : trailingHigh;
+  const effectiveStop = newTrailingHigh + distance;
+  const shouldClose = currentPrice >= effectiveStop;
+  return { newTrailingHigh, shouldClose, effectiveStop };
+}
+
+async function checkTrailingStops() {
+  const trades = await prisma.trade.findMany({
+    where: {
+      status: 'OPEN',
+      swap: { lte: 0 }, // exclude dealer trades
+      trailing_stop_distance: { not: null },
+    },
+    include: {
+      instrument: { select: { symbol: true, pip_size: true, lot_size: true } },
+      account: { select: { id: true, balance: true, margin_used: true, equity: true, leverage: true } },
+    },
+  });
+
+  const updates: Array<{ id: string; newHigh: number }> = [];
+
+  for (const trade of trades) {
+    const price = getCurrentPrice(trade.instrument.symbol);
+    if (!price || (price.bid === 0 && price.ask === 0)) continue;
+
+    const distance = (trade as any).trailing_stop_distance as number;
+    const openPriceFloat = Number(trade.open_price) / 100000;
+    const trailingHigh =
+      ((trade as any).trailing_stop_high as number | null) ?? openPriceFloat;
+
+    // Use bid for BUY (close-at-bid) and ask for SELL (close-at-ask) — same
+    // convention as fixed SL/TP.
+    const currentPrice = trade.side === 'BUY' ? price.bid : price.ask;
+
+    const decision = evaluateTrailingStop({
+      side: trade.side as 'BUY' | 'SELL',
+      currentPrice,
+      distance,
+      trailingHigh,
+    });
+
+    if (decision.shouldClose) {
+      await closeTradeAtPrice(trade, currentPrice, 'TRAILING_STOP');
+      continue;
+    }
+
+    if (decision.newTrailingHigh !== trailingHigh) {
+      updates.push({ id: trade.id, newHigh: decision.newTrailingHigh });
+    }
+  }
+
+  // Batch the trailing_stop_high updates so the hot path stays cheap.
+  if (updates.length > 0) {
+    await prisma.$transaction(
+      updates.map((u) =>
+        prisma.trade.update({ where: { id: u.id }, data: { trailing_stop_high: u.newHigh } })
+      )
+    );
+  }
+}
+
 // ─── 2. LIMIT/STOP Order Matching ───
 
 async function checkPendingOrders() {
@@ -138,6 +231,27 @@ async function checkPendingOrders() {
       await fillPendingOrder(order, price);
     }
   }
+}
+
+/**
+ * Sprint 5.4 — Cancel all PENDING siblings of an OCO group (excluding the
+ * order that just filled). Exported for direct invocation by other code paths
+ * (e.g. tests, manual fill helpers).
+ */
+export async function cancelOcoSiblings(ocoGroupId: string, filledOrderId: string): Promise<number> {
+  if (!ocoGroupId) return 0;
+  const result = await prisma.order.updateMany({
+    where: {
+      oco_group_id: ocoGroupId,
+      status: 'PENDING',
+      NOT: { id: filledOrderId },
+    },
+    data: { status: 'CANCELLED', filled_at: null },
+  });
+  if (result.count > 0) {
+    logger.info({ ocoGroupId, filledOrderId, cancelled: result.count }, '[PositionMonitor] OCO siblings cancelled');
+  }
+  return result.count;
 }
 
 // ─── 3. Margin Call / Auto-Liquidation ───
@@ -555,6 +669,11 @@ async function fillPendingOrder(order: any, price: { bid: number; ask: number })
       side: order.side,
       executionPrice,
     }, `[PositionMonitor] Pending ${order.type} order filled`);
+
+    // Sprint 5.4: cancel OCO sibling(s) on successful fill.
+    if (order.oco_group_id) {
+      await cancelOcoSiblings(order.oco_group_id, order.id);
+    }
   } catch (err) {
     logger.error({ err, orderId: order.id }, '[PositionMonitor] Failed to fill pending order');
   }

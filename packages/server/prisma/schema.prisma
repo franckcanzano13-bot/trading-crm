@@ -143,6 +143,11 @@ model Trade {
   swap          BigInt    @default(0)
   stop_loss          Float?
   take_profit        Float?
+  // Sprint 5.4: trailing stop. Distance is in price units (not pips). When set,
+  // position-monitor updates trailing_stop_high on favorable moves and closes
+  // the trade when the price retraces by `distance`.
+  trailing_stop_distance Float?
+  trailing_stop_high     Float?
   pnl_target         BigInt?   // dealer-specified target P&L (cents)
   scheduled_close_at DateTime? // when to auto-close (dealer scheduled trades)
   status             String    @default("OPEN")
@@ -175,12 +180,16 @@ model Order {
   take_profit   Float?
   status        String    @default("PENDING")
   filled_at     DateTime?
+  // Sprint 5.4: OCO (One-Cancels-the-Other). Two PENDING orders sharing a
+  // group id; on fill of one, the sibling is auto-cancelled.
+  oco_group_id  String?
   created_at    DateTime  @default(now())
   updated_at    DateTime  @updatedAt
 
   user       User       @relation(fields: [user_id], references: [id])
   instrument Instrument @relation(fields: [instrument_id], references: [id])
 
+  @@index([oco_group_id])
   @@map("orders")
 }
 

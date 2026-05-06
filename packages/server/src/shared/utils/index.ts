@@ -25,9 +25,20 @@ export function intToPrice(value: bigint, precision: number = 2): number {
   return Number(value) / multiplier;
 }
 
+import Decimal from 'decimal.js';
+
+// Sprint 4.3: increase Decimal precision globally so multi-step financial
+// calculations don't lose digits. 40 significant digits is overkill for
+// trading prices (max ~10 sig digits) but cheap and safe.
+Decimal.set({ precision: 40, rounding: Decimal.ROUND_HALF_UP });
+
 /**
  * Calculate P&L for a position in cents.
  * direction: 1 for BUY, -1 for SELL
+ *
+ * Sprint 4.3: uses decimal.js to avoid IEEE-754 cumulative error.
+ * Old code: 4 float multiplications then * 100 + Math.round.
+ * For BTCUSD at 70000 × 0.5 lot, the cent error was non-trivial.
  */
 export function calculatePnlCents(
   openPrice: number,
@@ -36,12 +47,20 @@ export function calculatePnlCents(
   lotSize: number,
   direction: 1 | -1
 ): bigint {
-  const pnlRaw = (currentPrice - openPrice) * volume * lotSize * direction;
-  return BigInt(Math.round(pnlRaw * 100)); // convert to cents
+  const pnl = new Decimal(currentPrice)
+    .minus(openPrice)
+    .times(volume)
+    .times(lotSize)
+    .times(direction)
+    .times(100); // to cents
+  // Round half up, return as BigInt
+  return BigInt(pnl.round().toFixed(0));
 }
 
 /**
  * Calculate required margin in cents.
+ *
+ * Sprint 4.3: uses decimal.js for the same reason as P&L.
  */
 export function calculateMarginCents(
   price: number,
@@ -49,8 +68,13 @@ export function calculateMarginCents(
   lotSize: number,
   leverage: number
 ): bigint {
-  const margin = (volume * lotSize * price) / leverage;
-  return BigInt(Math.round(margin * 100)); // convert to cents
+  if (leverage <= 0) return BigInt(0);
+  const margin = new Decimal(volume)
+    .times(lotSize)
+    .times(price)
+    .div(leverage)
+    .times(100); // to cents
+  return BigInt(margin.round().toFixed(0));
 }
 
 /**

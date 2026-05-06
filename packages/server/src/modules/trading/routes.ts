@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { CreateOrderSchema } from '@tradexlabel/shared';
 import { tenantResolver } from '../../shared/middleware/tenant-resolver';
 import { requireAuth } from '../../shared/middleware/auth';
-import { serializeBigInt, logger, priceToInt, calculateMarginCents } from '../../shared/utils/index';
+import { serializeBigInt, logger, priceToInt, calculateMarginCents, calculatePnlCents } from '../../shared/utils/index';
 import { executeOrder } from './engine';
 import { prisma } from '../../shared/database/prisma';
 import { audit } from '../../shared/audit';
@@ -114,8 +114,8 @@ export async function tradingRoutes(fastify: FastifyInstance) {
 
     const direction = trade.side === 'BUY' ? 1 : -1;
     const openPriceFloat = Number(trade.open_price) / 100000;
-    const pnlRaw = (closePrice - openPriceFloat) * trade.volume * trade.lot_size * direction;
-    const pnlCents = BigInt(Math.round(pnlRaw * 100));
+    // Sprint 4.3: decimal.js-backed precision (no IEEE-754 cumulative error)
+    const pnlCents = calculatePnlCents(openPriceFloat, closePrice, trade.volume, trade.lot_size, direction as 1 | -1);
 
     // EXEC-001: Atomic close + balance update + transaction.
     // The trade.update is idempotent (status='OPEN' guard) which prevents double-close races.

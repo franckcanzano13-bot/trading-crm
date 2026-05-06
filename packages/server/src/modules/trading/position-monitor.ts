@@ -1,6 +1,6 @@
 import { prisma } from '../../shared/database/prisma';
 import { getCurrentPrice, getPriceMap } from '../pricing/price-store';
-import { logger, priceToInt, calculateMarginCents } from '../../shared/utils/index';
+import { logger, priceToInt, calculateMarginCents, calculatePnlCents } from '../../shared/utils/index';
 import { audit } from '../../shared/audit';
 
 /**
@@ -153,8 +153,8 @@ function computeAccountState(trades: Array<any>) {
     const openPriceFloat = Number(trade.open_price) / 100000;
     const closePrice = trade.side === 'BUY' ? price.bid : price.ask;
     const direction = trade.side === 'BUY' ? 1 : -1;
-    const pnlRaw = (closePrice - openPriceFloat) * trade.volume * trade.instrument.lot_size * direction;
-    const pnlCents = BigInt(Math.round(pnlRaw * 100));
+    // Sprint 4.3: decimal.js-backed precision
+    const pnlCents = calculatePnlCents(openPriceFloat, closePrice, trade.volume, trade.instrument.lot_size, direction as 1 | -1);
     totalUnrealizedPnlCents += pnlCents;
     ranked.push({ trade, pnlCents, closePrice });
   }
@@ -319,12 +319,11 @@ async function closeDealerTrade(trade: any, closePrice: number, reason: string) 
   if (reason === 'DEALER_SCHEDULED' && targetPnl !== null) {
     finalPnl = targetPnl;
   } else {
-    // Real market P&L
+    // Real market P&L — Sprint 4.3 decimal precision
     const openPriceFloat = Number(trade.open_price) / 100000;
     const direction = trade.side === 'BUY' ? 1 : -1;
     const lotSize = trade.instrument?.lot_size || 1;
-    const pnlRaw = (closePrice - openPriceFloat) * trade.volume * lotSize * direction;
-    finalPnl = BigInt(Math.round(pnlRaw * 100));
+    finalPnl = calculatePnlCents(openPriceFloat, closePrice, trade.volume, lotSize, direction as 1 | -1);
   }
 
   const closePriceInt = priceToInt(closePrice, 5);
@@ -387,8 +386,8 @@ async function closeTradeAtPrice(
   const openPriceFloat = Number(trade.open_price) / 100000;
   const direction = trade.side === 'BUY' ? 1 : -1;
   const lotSize = trade.instrument?.lot_size || trade.lot_size || 1;
-  const pnlRaw = (closePrice - openPriceFloat) * trade.volume * lotSize * direction;
-  const pnlCents = BigInt(Math.round(pnlRaw * 100));
+  // Sprint 4.3: decimal.js for cumulative-error-free P&L
+  const pnlCents = calculatePnlCents(openPriceFloat, closePrice, trade.volume, lotSize, direction as 1 | -1);
 
   const status = reason === 'LIQUIDATED' ? 'LIQUIDATED' : 'CLOSED';
   const accountId = trade.account?.id || trade.account_id;

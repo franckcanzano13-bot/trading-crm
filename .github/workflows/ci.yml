@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+jobs:
+  server:
+    name: Server (typecheck + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: packages/server
+
+    env:
+      DATABASE_URL: 'file:./test.db'
+      JWT_SECRET: 'ci-test-jwt-secret-must-be-long-enough'
+      JWT_REFRESH_SECRET: 'ci-test-refresh-secret-must-be-long-enough'
+      NODE_ENV: 'test'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install root deps (workspace)
+        working-directory: .
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Push schema to test SQLite
+        run: npx prisma db push --skip-generate
+
+      - name: TypeScript typecheck
+        run: npx tsc --noEmit
+
+      - name: Vitest
+        run: npx vitest run
+
+  web:
+    name: Web (typecheck + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: packages/web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install root deps (workspace)
+        working-directory: .
+        run: npm ci
+
+      - name: Generate Prisma client (needed by shared types)
+        working-directory: packages/server
+        run: npx prisma generate
+
+      - name: TypeScript typecheck
+        run: npx tsc --noEmit
+
+      - name: Next.js build
+        env:
+          NEXT_PUBLIC_API_URL: 'http://localhost:6500'
+        run: npx next build

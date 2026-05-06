@@ -5,6 +5,8 @@ import helmet from '@fastify/helmet';
 import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
 import websocket from '@fastify/websocket';
+import swagger from '@fastify/swagger';
+import swaggerUi from '@fastify/swagger-ui';
 import { config } from './config/index';
 import { logger } from './shared/utils/index';
 import { prisma } from './shared/database/prisma';
@@ -78,6 +80,49 @@ async function buildServer() {
   });
 
   await fastify.register(websocket);
+
+  // Sprint 3.2: OpenAPI / Swagger UI — auto-generates spec from route schemas.
+  // Routes opt-in by adding a `schema: { ... }` Fastify route option. Routes
+  // without a schema still appear in the spec with empty descriptions.
+  // Disabled in production unless EXPOSE_API_DOCS is set.
+  const exposeDocs = config.NODE_ENV !== 'production' || process.env.EXPOSE_API_DOCS === '1';
+  if (exposeDocs) {
+    await fastify.register(swagger, {
+      openapi: {
+        openapi: '3.0.3',
+        info: {
+          title: 'TradeXLabel API',
+          description: 'Multi-tenant trading platform API. Endpoints expect X-Tenant-ID header for tenant routes; admin routes additionally require Bearer JWT.',
+          version: '1.0.0',
+        },
+        servers: [{ url: `http://${config.HOST}:${config.PORT}` }],
+        components: {
+          securitySchemes: {
+            BearerAuth: { type: 'http', scheme: 'bearer', bearerFormat: 'JWT' },
+            TenantHeader: { type: 'apiKey', in: 'header', name: 'X-Tenant-ID' },
+          },
+        },
+        tags: [
+          { name: 'auth', description: 'Trader registration & login' },
+          { name: 'admin', description: 'Broker admin operations (deposit, withdraw, KYC)' },
+          { name: 'trading', description: 'Order placement, positions, history' },
+          { name: 'instruments', description: 'Tradable instruments' },
+          { name: 'crm', description: 'Lead pipeline, affiliates, email' },
+          { name: 'dealer', description: 'Dealer interventions (B_BOOK_DEALER tenants only)' },
+          { name: 'totp', description: 'Two-factor authentication setup' },
+          { name: 'super', description: 'SuperAdmin platform operations' },
+        ],
+      },
+    });
+    await fastify.register(swaggerUi, {
+      routePrefix: '/api/docs',
+      uiConfig: {
+        docExpansion: 'list',
+        deepLinking: true,
+      },
+      staticCSP: true,
+    });
+  }
 
   // ─── BigInt serialization ───
   fastify.addHook('preSerialization', async (request, reply, payload) => {

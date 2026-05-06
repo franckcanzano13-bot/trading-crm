@@ -58,13 +58,12 @@ jobs:
       - name: TypeScript typecheck
         run: npx tsc --noEmit
 
-      # Sprint 6.3 / 6.7 / 7.7: ESLint is a real gate. The budget tracks the
-      # legacy `any` count. Sprint 7.7 dropped it from 199 → 100 by typing
-      # everything outside packages/server/src/modules/crm/. The remaining
-      # 100 all live in crm/routes.ts (1683-line monolith — its own sprint).
-      # Shrink each sprint until 0:  100 (now) → 50 → 25 → 0.
+      # Sprint 6.3 / 6.7 / 7.7 / 7.8: ESLint is a real gate. The legacy
+      # `any` count went 199 → 100 (Sprint 7.7) → 0 (Sprint 7.8 retyped
+      # crm/routes.ts). The budget is now zero — any new `any` warning
+      # blocks the build and forces a deliberate type decision.
       - name: ESLint
-        run: npx eslint 'src/**/*.ts' --max-warnings=100
+        run: npx eslint 'src/**/*.ts' --max-warnings=0
 
       # Sprint 6.3: npm audit gates on high+ severity. Drop the `|| true` so
       # known CVEs in production deps actually fail the build. Use

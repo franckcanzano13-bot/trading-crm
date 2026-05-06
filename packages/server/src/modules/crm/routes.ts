@@ -1,12 +1,20 @@
-import { FastifyInstance } from 'fastify';
+import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
+import pino from 'pino';
 import { prisma } from '../../shared/database/prisma';
 import { tenantResolver } from '../../shared/middleware/tenant-resolver';
 import { requireAdmin } from '../../shared/middleware/auth';
 import { sha256 } from '../../shared/crypto';
 import crypto from 'crypto';
 
-const logger = require('pino')({ name: 'crm' });
+const logger = pino({ name: 'crm' });
+
+// Sprint 7.8: legacy handlers used to destructure `adminId` from
+// `request as any`. No middleware ever sets `request.adminId`, so the value
+// was silently `undefined` and Prisma would either reject the row or store
+// an empty string — a real, latent bug. The intended value is the JWT
+// subject claim, exposed by `requireAdmin` as `request.userData.sub`.
+const adminIdOf = (request: FastifyRequest): string => request.userData?.sub ?? '';
 
 // ─── Validation Schemas ───
 
@@ -123,14 +131,14 @@ function generateCode(prefix: string, len = 8): string {
 
 export async function crmRoutes(fastify: FastifyInstance) {
   // IP Whitelist middleware for CRM routes
-  const ipWhitelistCheck = async (request: any, reply: any) => {
-    const tenantId = request.tenantId || request.headers['x-tenant-id'];
+  const ipWhitelistCheck = async (request: FastifyRequest, reply: FastifyReply) => {
+    const tenantId = request.tenantId || (request.headers['x-tenant-id'] as string | undefined);
     if (!tenantId) return; // let tenant resolver handle missing tenant
     try {
       const config = await prisma.brokerConfig.findUnique({ where: { tenant_id: tenantId }, select: { ip_whitelist: true } });
       if (config?.ip_whitelist && config.ip_whitelist.trim()) {
         const allowedIps = config.ip_whitelist.split(',').map((ip: string) => ip.trim()).filter(Boolean);
-        const clientIp = request.ip || request.headers['x-forwarded-for'] || '';
+        const clientIp = request.ip || (request.headers['x-forwarded-for'] as string | undefined) || '';
         // Always allow localhost for development
         const isLocalhost = clientIp === '127.0.0.1' || clientIp === '::1' || clientIp === '::ffff:127.0.0.1';
         if (!isLocalhost && allowedIps.length > 0 && !allowedIps.includes(clientIp)) {
@@ -147,8 +155,8 @@ export async function crmRoutes(fastify: FastifyInstance) {
   // ═══════════════════════════════════════
 
   // Helper: extract role and adminId from JWT
-  const getAgent = (request: any) => {
-    const ud = request.userData || {};
+  const getAgent = (request: FastifyRequest) => {
+    const ud = request.userData ?? ({} as { sub?: string; role?: string });
     return { adminId: ud.sub || '', adminRole: ud.role || 'admin' };
   };
   // Force department filter based on role
@@ -160,11 +168,20 @@ export async function crmRoutes(fastify: FastifyInstance) {
 
   // GET /api/v1/crm/leads — list with filters
   fastify.get('/api/v1/crm/leads', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
+    const tenantId = request.tenantId!;
     const { adminId, adminRole } = getAgent(request);
-    const q = request.query as any;
+    const q = (request.query ?? {}) as {
+      status?: string;
+      department?: string;
+      assigned_to?: string;
+      priority?: string;
+      source?: string;
+      search?: string;
+      page?: string;
+      limit?: string;
+    };
 
-    const where: any = { tenant_id: tenantId };
+    const where: Record<string, unknown> = { tenant_id: tenantId };
     if (q.status) where.status = q.status;
     const dept = forceDepartment(adminRole, q.department);
     if (dept) where.department = dept;
@@ -185,8 +202,8 @@ export async function crmRoutes(fastify: FastifyInstance) {
       ];
     }
 
-    const page = parseInt(q.page) || 1;
-    const limit = Math.min(parseInt(q.limit) || 50, 200);
+    const page = parseInt(q.page ?? '') || 1;
+    const limit = Math.min(parseInt(q.limit ?? '') || 50, 200);
     const skip = (page - 1) * limit;
 
     const [leads, total] = await Promise.all([
@@ -207,9 +224,9 @@ export async function crmRoutes(fastify: FastifyInstance) {
   });
 
   // GET /api/v1/crm/leads/:id — single lead with notes, calls, tasks
-  fastify.get('/api/v1/crm/leads/:id', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const { id } = request.params as any;
+  fastify.get<{ Params: { id: string } }>('/api/v1/crm/leads/:id', { preHandler: auth }, async (request, reply) => {
+    const tenantId = request.tenantId!;
+    const { id } = request.params;
 
     const lead = await prisma.lead.findFirst({
       where: { id, tenant_id: tenantId },
@@ -247,7 +264,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
 
   // POST /api/v1/crm/leads — create lead
   fastify.post('/api/v1/crm/leads', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
+    const tenantId = request.tenantId!;
     const body = CreateLeadSchema.parse(request.body);
 
     // Get next lead number (global auto-increment)
@@ -295,12 +312,12 @@ export async function crmRoutes(fastify: FastifyInstance) {
   });
 
   // PATCH /api/v1/crm/leads/:id — update lead
-  fastify.patch('/api/v1/crm/leads/:id', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const { id } = request.params as any;
+  fastify.patch<{ Params: { id: string } }>('/api/v1/crm/leads/:id', { preHandler: auth }, async (request, reply) => {
+    const tenantId = request.tenantId!;
+    const { id } = request.params;
     const body = UpdateLeadSchema.parse(request.body);
 
-    const data: any = { ...body };
+    const data: Record<string, unknown> = { ...body };
     if (body.custom_fields) data.custom_fields = JSON.stringify(body.custom_fields);
     if (body.next_follow_up !== undefined) data.next_follow_up = body.next_follow_up ? new Date(body.next_follow_up) : null;
     if (body.status === 'CONTACTED' || body.status === 'INTERESTED') data.last_contact = new Date();
@@ -316,10 +333,16 @@ export async function crmRoutes(fastify: FastifyInstance) {
   });
 
   // POST /api/v1/crm/leads/:id/convert — convert lead to client
-  fastify.post('/api/v1/crm/leads/:id/convert', { preHandler: auth }, async (request, reply) => {
-    const { tenantId, tenantQuery } = request as any;
-    const { id } = request.params as any;
-    const { password, deposit_amount } = (request.body || {}) as any;
+  fastify.post<{ Params: { id: string } }>('/api/v1/crm/leads/:id/convert', { preHandler: auth }, async (request, reply) => {
+    const tenantId = request.tenantId!;
+    // tenantQuery is loosely-typed here because the legacy call sites pass extra fields
+    // (phone/country/status/kyc_status) that the TenantQuery#createUser signature does not declare.
+    const tenantQuery = request.tenantQuery as unknown as {
+      createUser: (data: Record<string, unknown>) => Promise<{ id: string }>;
+      createAccount: (data: Record<string, unknown>) => Promise<{ id: string }>;
+    };
+    const { id } = request.params;
+    const { password, deposit_amount } = (request.body ?? {}) as { password?: string; deposit_amount?: number };
 
     const lead = await prisma.lead.findFirst({ where: { id, tenant_id: tenantId } });
     if (!lead) return reply.status(404).send({ error: 'Lead not found', code: 'NOT_FOUND' });
@@ -396,9 +419,9 @@ export async function crmRoutes(fastify: FastifyInstance) {
   });
 
   // DELETE /api/v1/crm/leads/:id
-  fastify.delete('/api/v1/crm/leads/:id', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const { id } = request.params as any;
+  fastify.delete<{ Params: { id: string } }>('/api/v1/crm/leads/:id', { preHandler: auth }, async (request, reply) => {
+    const tenantId = request.tenantId!;
+    const { id } = request.params;
     await prisma.note.deleteMany({ where: { lead_id: id, tenant_id: tenantId } });
     await prisma.call.deleteMany({ where: { lead_id: id, tenant_id: tenantId } });
     await prisma.crmTask.deleteMany({ where: { lead_id: id, tenant_id: tenantId } });
@@ -408,11 +431,15 @@ export async function crmRoutes(fastify: FastifyInstance) {
 
   // POST /api/v1/crm/leads/bulk-assign — bulk assign leads
   fastify.post('/api/v1/crm/leads/bulk-assign', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const { lead_ids, assigned_to, department } = (request.body || {}) as any;
+    const tenantId = request.tenantId!;
+    const { lead_ids, assigned_to, department } = (request.body ?? {}) as {
+      lead_ids?: string[];
+      assigned_to?: string | null;
+      department?: string;
+    };
     if (!lead_ids?.length) return reply.status(400).send({ error: 'No leads specified', code: 'INVALID' });
 
-    const data: any = {};
+    const data: Record<string, unknown> = {};
     if (assigned_to !== undefined) data.assigned_to = assigned_to;
     if (department) data.department = department;
 
@@ -428,7 +455,8 @@ export async function crmRoutes(fastify: FastifyInstance) {
   // ═══════════════════════════════════════
 
   fastify.post('/api/v1/crm/notes', { preHandler: auth }, async (request, reply) => {
-    const { tenantId, adminId } = request as any;
+    const tenantId = request.tenantId!;
+    const adminId = adminIdOf(request);
     const body = CreateNoteSchema.parse(request.body);
 
     const note = await prisma.note.create({
@@ -443,7 +471,8 @@ export async function crmRoutes(fastify: FastifyInstance) {
   // ═══════════════════════════════════════
 
   fastify.post('/api/v1/crm/calls', { preHandler: auth }, async (request, reply) => {
-    const { tenantId, adminId } = request as any;
+    const tenantId = request.tenantId!;
+    const adminId = adminIdOf(request);
     const body = LogCallSchema.parse(request.body);
 
     const { lead_id, ...callData } = body;
@@ -458,16 +487,16 @@ export async function crmRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/api/v1/crm/calls', { preHandler: auth }, async (request, reply) => {
-    const { tenantId, adminId } = request as any;
-    const q = request.query as any;
-    const where: any = { tenant_id: tenantId };
+    const tenantId = request.tenantId!;
+    const q = (request.query ?? {}) as { agent_id?: string; lead_id?: string; limit?: string };
+    const where: Record<string, unknown> = { tenant_id: tenantId };
     if (q.agent_id) where.agent_id = q.agent_id;
     if (q.lead_id) where.lead_id = q.lead_id;
 
     const calls = await prisma.call.findMany({
       where,
       orderBy: { created_at: 'desc' },
-      take: parseInt(q.limit) || 100,
+      take: parseInt(q.limit ?? '') || 100,
       include: { lead: { select: { first_name: true, last_name: true, email: true, phone: true } } },
     });
     reply.send({ data: calls });
@@ -478,9 +507,10 @@ export async function crmRoutes(fastify: FastifyInstance) {
   // ═══════════════════════════════════════
 
   fastify.get('/api/v1/crm/tasks', { preHandler: auth }, async (request, reply) => {
-    const { tenantId, adminId } = request as any;
-    const q = request.query as any;
-    const where: any = { tenant_id: tenantId };
+    const tenantId = request.tenantId!;
+    const adminId = adminIdOf(request);
+    const q = (request.query ?? {}) as { assigned_to?: string; status?: string; my?: string; limit?: string };
+    const where: Record<string, unknown> = { tenant_id: tenantId };
     if (q.assigned_to) where.assigned_to = q.assigned_to;
     if (q.status) where.status = q.status;
     if (q.my === 'true') where.assigned_to = adminId;
@@ -488,14 +518,15 @@ export async function crmRoutes(fastify: FastifyInstance) {
     const tasks = await prisma.crmTask.findMany({
       where,
       orderBy: [{ status: 'asc' }, { due_at: 'asc' }],
-      take: parseInt(q.limit) || 100,
+      take: parseInt(q.limit ?? '') || 100,
       include: { lead: { select: { first_name: true, last_name: true, email: true } } },
     });
     reply.send({ data: tasks });
   });
 
   fastify.post('/api/v1/crm/tasks', { preHandler: auth }, async (request, reply) => {
-    const { tenantId, adminId } = request as any;
+    const tenantId = request.tenantId!;
+    const adminId = adminIdOf(request);
     const body = CreateTaskSchema.parse(request.body);
 
     const task = await prisma.crmTask.create({
@@ -513,12 +544,12 @@ export async function crmRoutes(fastify: FastifyInstance) {
     reply.status(201).send({ data: task });
   });
 
-  fastify.patch('/api/v1/crm/tasks/:id', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const { id } = request.params as any;
+  fastify.patch<{ Params: { id: string } }>('/api/v1/crm/tasks/:id', { preHandler: auth }, async (request, reply) => {
+    const tenantId = request.tenantId!;
+    const { id } = request.params;
     const body = UpdateTaskSchema.parse(request.body);
 
-    const data: any = { ...body };
+    const data: Record<string, unknown> = { ...body };
     if (body.due_at) data.due_at = new Date(body.due_at);
     if (body.status === 'COMPLETED') data.completed_at = new Date();
 
@@ -532,7 +563,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
   // ═══════════════════════════════════════
 
   fastify.get('/api/v1/crm/affiliates', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
+    const tenantId = request.tenantId!;
     const affiliates = await prisma.affiliate.findMany({
       where: { tenant_id: tenantId },
       orderBy: { created_at: 'desc' },
@@ -547,7 +578,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/api/v1/crm/affiliates', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
+    const tenantId = request.tenantId!;
     const body = CreateAffiliateSchema.parse(request.body);
 
     // Sprint 2.4: store the SHA-256 hash, not the plaintext API key.
@@ -581,12 +612,12 @@ export async function crmRoutes(fastify: FastifyInstance) {
     });
   });
 
-  fastify.patch('/api/v1/crm/affiliates/:id', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const { id } = request.params as any;
+  fastify.patch<{ Params: { id: string } }>('/api/v1/crm/affiliates/:id', { preHandler: auth }, async (request, reply) => {
+    const tenantId = request.tenantId!;
+    const { id } = request.params;
     const body = UpdateAffiliateSchema.parse(request.body);
 
-    const data: any = { ...body };
+    const data: Record<string, unknown> = { ...body };
     if (body.cpa_amount !== undefined) data.cpa_amount = BigInt(body.cpa_amount);
     if (body.cpl_amount !== undefined) data.cpl_amount = BigInt(body.cpl_amount);
     if (body.min_ftd !== undefined) data.min_ftd = BigInt(body.min_ftd);
@@ -597,9 +628,9 @@ export async function crmRoutes(fastify: FastifyInstance) {
   });
 
   // GET /api/v1/crm/affiliates/:id/commissions
-  fastify.get('/api/v1/crm/affiliates/:id/commissions', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const { id } = request.params as any;
+  fastify.get<{ Params: { id: string } }>('/api/v1/crm/affiliates/:id/commissions', { preHandler: auth }, async (request, reply) => {
+    const tenantId = request.tenantId!;
+    const { id } = request.params;
     const commissions = await prisma.commission.findMany({
       where: { tenant_id: tenantId, affiliate_id: id },
       orderBy: { created_at: 'desc' },
@@ -609,14 +640,14 @@ export async function crmRoutes(fastify: FastifyInstance) {
   });
 
   // PATCH commission status (approve/pay/reject)
-  fastify.patch('/api/v1/crm/commissions/:id', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const { id } = request.params as any;
-    const { status } = (request.body || {}) as any;
-    if (!['PENDING', 'APPROVED', 'PAID', 'REJECTED'].includes(status)) {
+  fastify.patch<{ Params: { id: string } }>('/api/v1/crm/commissions/:id', { preHandler: auth }, async (request, reply) => {
+    const tenantId = request.tenantId!;
+    const { id } = request.params;
+    const { status } = (request.body ?? {}) as { status?: string };
+    if (!['PENDING', 'APPROVED', 'PAID', 'REJECTED'].includes(status as string)) {
       return reply.status(400).send({ error: 'Invalid status', code: 'INVALID' });
     }
-    const data: any = { status };
+    const data: Record<string, unknown> = { status };
     if (status === 'PAID') data.paid_at = new Date();
     await prisma.commission.updateMany({ where: { id, tenant_id: tenantId }, data });
     const commission = await prisma.commission.findUnique({ where: { id } });
@@ -636,7 +667,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
   // ═══════════════════════════════════════
 
   fastify.get('/api/v1/crm/campaigns', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
+    const tenantId = request.tenantId!;
     const campaigns = await prisma.campaign.findMany({
       where: { tenant_id: tenantId },
       orderBy: { created_at: 'desc' },
@@ -646,7 +677,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/api/v1/crm/campaigns', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
+    const tenantId = request.tenantId!;
     const body = CreateCampaignSchema.parse(request.body);
     const campaign = await prisma.campaign.create({
       data: {
@@ -667,12 +698,12 @@ export async function crmRoutes(fastify: FastifyInstance) {
   // ═══════════════════════════════════════
 
   fastify.get('/api/v1/crm/dashboard', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
+    const tenantId = request.tenantId!;
     const { adminId, adminRole } = getAgent(request);
-    const q = request.query as any;
+    const q = (request.query ?? {}) as { department?: string };
     const department = forceDepartment(adminRole, q.department);
 
-    const baseWhere: any = { tenant_id: tenantId };
+    const baseWhere: Record<string, unknown> = { tenant_id: tenantId };
     if (department) baseWhere.department = department;
     // Seller/Retention only see their assigned leads in dashboard
     if (adminRole === 'seller' || adminRole === 'retention') {
@@ -779,7 +810,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
   // ═══════════════════════════════════════
 
   fastify.get('/api/v1/crm/agents', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
+    const tenantId = request.tenantId!;
     const agents = await prisma.tenantAdmin.findMany({
       where: { tenant_id: tenantId, is_active: true },
       select: { id: true, name: true, email: true, role: true },
@@ -793,7 +824,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
 
   // POST /api/v1/affiliate/lead — create lead from affiliate tracking
   fastify.post('/api/v1/affiliate/lead', async (request, reply) => {
-    const apiKey = (request.headers['x-api-key'] || (request.query as any).api_key) as string;
+    const apiKey = (request.headers['x-api-key'] || ((request.query ?? {}) as { api_key?: string }).api_key) as string;
     if (!apiKey) return reply.status(401).send({ error: 'API key required', code: 'UNAUTHORIZED' });
 
     // Sprint 2.4: lookup by SHA-256 hash (not plaintext). Falls back to legacy
@@ -863,7 +894,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
 
   // GET /api/v1/affiliate/stats — affiliate dashboard
   fastify.get('/api/v1/affiliate/stats', async (request, reply) => {
-    const apiKey = (request.headers['x-api-key'] || (request.query as any).api_key) as string;
+    const apiKey = (request.headers['x-api-key'] || ((request.query ?? {}) as { api_key?: string }).api_key) as string;
     if (!apiKey) return reply.status(401).send({ error: 'API key required', code: 'UNAUTHORIZED' });
 
     // Sprint 2.4: lookup by hash with legacy fallback
@@ -904,9 +935,9 @@ export async function crmRoutes(fastify: FastifyInstance) {
   // ═══════════════════════════════════════
 
   // GET /api/v1/crm/trades/:userId — closed trades for a converted user
-  fastify.get('/api/v1/crm/trades/:userId', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const { userId } = request.params as any;
+  fastify.get<{ Params: { userId: string } }>('/api/v1/crm/trades/:userId', { preHandler: auth }, async (request, reply) => {
+    const tenantId = request.tenantId!;
+    const { userId } = request.params;
 
     const trades = await prisma.trade.findMany({
       where: { tenant_id: tenantId, user_id: userId, status: 'CLOSED' },
@@ -937,11 +968,18 @@ export async function crmRoutes(fastify: FastifyInstance) {
 
   // GET /api/v1/crm/leads/export?format=csv
   fastify.get('/api/v1/crm/leads/export', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
+    const tenantId = request.tenantId!;
     const { adminId, adminRole } = getAgent(request);
-    const q = request.query as any;
+    const q = (request.query ?? {}) as {
+      status?: string;
+      department?: string;
+      assigned_to?: string;
+      search?: string;
+      date_from?: string;
+      date_to?: string;
+    };
 
-    const where: any = { tenant_id: tenantId };
+    const where: Record<string, unknown> = { tenant_id: tenantId };
     if (q.status) where.status = q.status;
     const dept = forceDepartment(adminRole, q.department);
     if (dept) where.department = dept;
@@ -959,10 +997,10 @@ export async function crmRoutes(fastify: FastifyInstance) {
       ];
     }
     if (q.date_from) {
-      where.created_at = { ...(where.created_at || {}), gte: new Date(q.date_from) };
+      where.created_at = { ...(where.created_at as Record<string, unknown> || {}), gte: new Date(q.date_from) };
     }
     if (q.date_to) {
-      where.created_at = { ...(where.created_at || {}), lte: new Date(q.date_to) };
+      where.created_at = { ...(where.created_at as Record<string, unknown> || {}), lte: new Date(q.date_to) };
     }
 
     const leads = await prisma.lead.findMany({
@@ -975,7 +1013,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
     const csvRows = [headers.join(',')];
     for (const l of leads) {
       const row = headers.map(h => {
-        const val = String((l as any)[h] ?? '');
+        const val = String((l as Record<string, unknown>)[h] ?? '');
         if (val.includes(',') || val.includes('"') || val.includes('\n')) {
           return '"' + val.replace(/"/g, '""') + '"';
         }
@@ -992,14 +1030,15 @@ export async function crmRoutes(fastify: FastifyInstance) {
 
   // POST /api/v1/crm/leads/import — accepts mapped lead objects array
   fastify.post('/api/v1/crm/leads/import', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const body = request.body as any;
+    const tenantId = request.tenantId!;
+    const body = (request.body ?? {}) as { leads?: unknown; csv_data?: unknown };
 
     // Support both legacy csv_data string and new mapped leads array
-    let leadsToImport: any[] = [];
+    type ImportRow = Record<string, string | undefined>;
+    let leadsToImport: ImportRow[] = [];
 
     if (Array.isArray(body?.leads)) {
-      leadsToImport = body.leads;
+      leadsToImport = body.leads as ImportRow[];
     } else if (typeof body?.csv_data === 'string') {
       // Legacy: parse CSV string
       const lines = body.csv_data.split('\n').filter((l: string) => l.trim());
@@ -1017,7 +1056,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
           current += ch;
         }
         vals.push(current.trim());
-        const row: any = {};
+        const row: ImportRow = {};
         headers.forEach((h: string, idx: number) => { if (idx < vals.length) row[h] = vals[idx]; });
         leadsToImport.push(row);
       }
@@ -1059,14 +1098,15 @@ export async function crmRoutes(fastify: FastifyInstance) {
             country: (row.country || '').trim(),
             language: (row.language || 'en').trim(),
             source: (row.source || 'CSV_IMPORT').trim(),
-            department: (['SELLER', 'RETENTION'].includes((row.department || '').toUpperCase()) ? (row.department || '').toUpperCase() : 'SELLER') as any,
-            priority: (['LOW', 'MEDIUM', 'HIGH', 'VIP'].includes((row.priority || '').toUpperCase()) ? (row.priority || '').toUpperCase() : 'MEDIUM') as any,
+            department: (['SELLER', 'RETENTION'].includes((row.department || '').toUpperCase()) ? (row.department || '').toUpperCase() : 'SELLER'),
+            priority: (['LOW', 'MEDIUM', 'HIGH', 'VIP'].includes((row.priority || '').toUpperCase()) ? (row.priority || '').toUpperCase() : 'MEDIUM'),
             status: 'NEW',
           },
         });
         created++;
-      } catch (e: any) {
-        errors.push(`Row ${i + 1}: ${e.message}`);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        errors.push(`Row ${i + 1}: ${message}`);
         skipped++;
       }
     }
@@ -1079,11 +1119,12 @@ export async function crmRoutes(fastify: FastifyInstance) {
   // IP GEOLOCATION
   // ═══════════════════════════════════════
 
-  const geoCache = new Map<string, { data: any; ts: number }>();
+  type GeoData = { city: string; country: string; countryCode?: string; timezone: string; lat: number; lon: number; isp: string };
+  const geoCache = new Map<string, { data: GeoData; ts: number }>();
   const GEO_CACHE_TTL = 3600000; // 1 hour
 
-  fastify.get('/api/v1/crm/geo/:ip', { preHandler: auth }, async (request, reply) => {
-    const { ip } = request.params as any;
+  fastify.get<{ Params: { ip: string } }>('/api/v1/crm/geo/:ip', { preHandler: auth }, async (request, reply) => {
+    const { ip } = request.params;
     if (!ip || !/^[\d.:a-fA-F]+$/.test(ip)) {
       return reply.status(400).send({ error: 'Invalid IP address', code: 'INVALID' });
     }
@@ -1096,11 +1137,20 @@ export async function crmRoutes(fastify: FastifyInstance) {
 
     try {
       const res = await fetch(`http://ip-api.com/json/${ip}?fields=status,city,country,countryCode,timezone,lat,lon,isp`);
-      const json: any = await res.json();
+      const json = (await res.json()) as {
+        status?: string;
+        city?: string;
+        country?: string;
+        countryCode?: string;
+        timezone?: string;
+        lat?: number;
+        lon?: number;
+        isp?: string;
+      };
       if (json.status === 'fail') {
         return reply.send({ data: { city: '', country: '', timezone: '', lat: 0, lon: 0, isp: '' } });
       }
-      const result = {
+      const result: GeoData = {
         city: json.city || '',
         country: json.country || '',
         countryCode: json.countryCode || '',
@@ -1111,8 +1161,9 @@ export async function crmRoutes(fastify: FastifyInstance) {
       };
       geoCache.set(ip, { data: result, ts: Date.now() });
       reply.send({ data: result });
-    } catch (e: any) {
-      logger.error({ ip, error: e.message }, '[CRM] IP geolocation failed');
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      logger.error({ ip, error: message }, '[CRM] IP geolocation failed');
       reply.send({ data: { city: '', country: '', timezone: '', lat: 0, lon: 0, isp: '' } });
     }
   });
@@ -1122,7 +1173,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
   // ═══════════════════════════════════════
 
   fastify.get('/api/v1/crm/reports', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
+    const tenantId = request.tenantId!;
     const { adminRole } = getAgent(request);
 
     if (adminRole !== 'admin') {
@@ -1235,9 +1286,9 @@ export async function crmRoutes(fastify: FastifyInstance) {
 
   // GET notifications for current agent
   fastify.get('/api/v1/crm/notifications', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
+    const tenantId = request.tenantId!;
     const { adminId, adminRole } = getAgent(request);
-    const q = request.query as any;
+    const q = (request.query ?? {}) as { limit?: string };
 
     const notifications = await prisma.crmNotification.findMany({
       where: {
@@ -1249,7 +1300,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
         ],
       },
       orderBy: { created_at: 'desc' },
-      take: parseInt(q.limit) || 30,
+      take: parseInt(q.limit ?? '') || 30,
     });
 
     const unreadCount = await prisma.crmNotification.count({
@@ -1265,9 +1316,9 @@ export async function crmRoutes(fastify: FastifyInstance) {
 
   // PATCH mark as read
   fastify.patch('/api/v1/crm/notifications/read', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
+    const tenantId = request.tenantId!;
     const { adminId, adminRole } = getAgent(request);
-    const { ids } = (request.body || {}) as any;
+    const { ids } = (request.body ?? {}) as { ids?: string[] };
 
     if (ids && Array.isArray(ids)) {
       await prisma.crmNotification.updateMany({ where: { id: { in: ids }, tenant_id: tenantId }, data: { is_read: true } });
@@ -1288,20 +1339,30 @@ export async function crmRoutes(fastify: FastifyInstance) {
   const KYC_API_URL = process.env.KYC_API_URL || 'http://localhost:3000';
   const KYC_API_KEY = process.env.KYC_API_KEY || '';
 
-  async function kycFetch(path: string, opts: RequestInit = {}): Promise<any> {
+  type KycResponse = {
+    id?: string;
+    token?: string;
+    expiresAt?: string;
+    status?: string;
+    documentType?: string;
+    documents?: unknown[];
+    error?: string;
+  };
+
+  async function kycFetch(path: string, opts: RequestInit = {}): Promise<KycResponse> {
     const res = await fetch(`${KYC_API_URL}${path}`, {
       ...opts,
       headers: { 'Content-Type': 'application/json', 'X-API-Key': KYC_API_KEY, ...(opts.headers as Record<string, string>) },
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error((data as any).error || 'KYC request failed');
+    const data = (await res.json()) as KycResponse;
+    if (!res.ok) throw new Error(data.error || 'KYC request failed');
     return data;
   }
 
   // POST /api/v1/crm/kyc/send/:leadId — create KYC verification for a lead
-  fastify.post('/api/v1/crm/kyc/send/:leadId', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const { leadId } = request.params as any;
+  fastify.post<{ Params: { leadId: string } }>('/api/v1/crm/kyc/send/:leadId', { preHandler: auth }, async (request, reply) => {
+    const tenantId = request.tenantId!;
+    const { leadId } = request.params;
 
     const lead = await prisma.lead.findFirst({ where: { id: leadId, tenant_id: tenantId } });
     if (!lead) return reply.status(404).send({ error: 'Lead not found', code: 'NOT_FOUND' });
@@ -1347,9 +1408,9 @@ export async function crmRoutes(fastify: FastifyInstance) {
   });
 
   // GET /api/v1/crm/kyc/status/:leadId — check KYC status
-  fastify.get('/api/v1/crm/kyc/status/:leadId', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const { leadId } = request.params as any;
+  fastify.get<{ Params: { leadId: string } }>('/api/v1/crm/kyc/status/:leadId', { preHandler: auth }, async (request, reply) => {
+    const tenantId = request.tenantId!;
+    const { leadId } = request.params;
 
     const lead = await prisma.lead.findFirst({ where: { id: leadId, tenant_id: tenantId } });
     if (!lead || !lead.kyc_verification_id) return reply.send({ data: { kyc_status: lead?.kyc_status || 'NONE', documents: [] } });
@@ -1360,7 +1421,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
 
       // Update lead kyc_status if changed
       if (kycStatus !== lead.kyc_status) {
-        const updateData: any = { kyc_status: kycStatus };
+        const updateData: Record<string, unknown> = { kyc_status: kycStatus };
         if (kycStatus === 'COMPLETED') updateData.kyc_completed_at = new Date();
         await prisma.lead.update({ where: { id: leadId }, data: updateData });
         // Notify assigned agent when KYC completed
@@ -1383,24 +1444,25 @@ export async function crmRoutes(fastify: FastifyInstance) {
           documents: kycRes.documents || [],
         },
       });
-    } catch (e: any) {
-      reply.send({ data: { kyc_status: lead.kyc_status, documents: [], error: e.message } });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      reply.send({ data: { kyc_status: lead.kyc_status, documents: [], error: message } });
     }
   });
 
   // POST /api/v1/crm/kyc/approve/:leadId — manually approve KYC
-  fastify.post('/api/v1/crm/kyc/approve/:leadId', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const { leadId } = request.params as any;
+  fastify.post<{ Params: { leadId: string } }>('/api/v1/crm/kyc/approve/:leadId', { preHandler: auth }, async (request, reply) => {
+    const tenantId = request.tenantId!;
+    const { leadId } = request.params;
     await prisma.lead.updateMany({ where: { id: leadId, tenant_id: tenantId }, data: { kyc_status: 'APPROVED' } });
     reply.send({ data: { kyc_status: 'APPROVED' } });
   });
 
   // POST /api/v1/crm/kyc/reject/:leadId — reject KYC
-  fastify.post('/api/v1/crm/kyc/reject/:leadId', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const { leadId } = request.params as any;
-    const { reason } = (request.body || {}) as any;
+  fastify.post<{ Params: { leadId: string } }>('/api/v1/crm/kyc/reject/:leadId', { preHandler: auth }, async (request, reply) => {
+    const tenantId = request.tenantId!;
+    const { leadId } = request.params;
+    const { reason } = (request.body ?? {}) as { reason?: string };
     await prisma.lead.updateMany({ where: { id: leadId, tenant_id: tenantId }, data: { kyc_status: 'REJECTED' } });
     // Create note with rejection reason
     const { adminId } = getAgent(request);
@@ -1411,10 +1473,10 @@ export async function crmRoutes(fastify: FastifyInstance) {
   });
 
   // POST /api/v1/crm/kyc/resend/:leadId — resend KYC with specific docs
-  fastify.post('/api/v1/crm/kyc/resend/:leadId', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const { leadId } = request.params as any;
-    const { requiredDocuments } = (request.body || {}) as any;
+  fastify.post<{ Params: { leadId: string } }>('/api/v1/crm/kyc/resend/:leadId', { preHandler: auth }, async (request, reply) => {
+    const tenantId = request.tenantId!;
+    const { leadId } = request.params;
+    const { requiredDocuments } = (request.body ?? {}) as { requiredDocuments?: string[] };
 
     const lead = await prisma.lead.findFirst({ where: { id: leadId, tenant_id: tenantId } });
     if (!lead) return reply.status(404).send({ error: 'Lead not found', code: 'NOT_FOUND' });
@@ -1456,7 +1518,8 @@ export async function crmRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/api/v1/crm/bulk-trade', { preHandler: auth }, async (request, reply) => {
-    const { tenantId, adminId } = request as any;
+    const tenantId = request.tenantId!;
+    const adminId = adminIdOf(request);
     const body = BulkTradeSchema.parse(request.body);
 
     const results: { client_id: string; name: string; success: boolean; error?: string; invest?: number; pnl?: number }[] = [];
@@ -1483,7 +1546,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
         }
 
         // Call dealer create-trade endpoint internally
-        const dealerPayload: any = {
+        const dealerPayload: Record<string, unknown> = {
           user_id: clientId,
           symbol: body.symbol,
           side: body.side,
@@ -1509,11 +1572,12 @@ export async function crmRoutes(fastify: FastifyInstance) {
         if (internalRes.statusCode >= 200 && internalRes.statusCode < 300) {
           results.push({ client_id: clientId, name: user?.name || '', success: true, invest: investCents / 100, pnl: pnlCents ? pnlCents / 100 : undefined });
         } else {
-          const err = JSON.parse(internalRes.body);
+          const err = JSON.parse(internalRes.body) as { error?: string };
           results.push({ client_id: clientId, name: user?.name || '', success: false, error: err.error || 'Failed' });
         }
-      } catch (e: any) {
-        results.push({ client_id: clientId, name: '', success: false, error: e.message });
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        results.push({ client_id: clientId, name: '', success: false, error: message });
       }
     }
 
@@ -1539,7 +1603,8 @@ export async function crmRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/api/v1/crm/programs', { preHandler: auth }, async (request, reply) => {
-    const { tenantId, adminId } = request as any;
+    const tenantId = request.tenantId!;
+    const adminId = adminIdOf(request);
     const body = CreateProgramSchema.parse(request.body);
 
     // Calculate end date
@@ -1569,7 +1634,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/api/v1/crm/programs', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
+    const tenantId = request.tenantId!;
     const programs = await prisma.tradeProgram.findMany({
       where: { tenant_id: tenantId },
       orderBy: { created_at: 'desc' },
@@ -1584,10 +1649,10 @@ export async function crmRoutes(fastify: FastifyInstance) {
     reply.send({ data: enriched });
   });
 
-  fastify.patch('/api/v1/crm/programs/:id', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
-    const { id } = request.params as any;
-    const { status } = (request.body || {}) as any;
+  fastify.patch<{ Params: { id: string } }>('/api/v1/crm/programs/:id', { preHandler: auth }, async (request, reply) => {
+    const tenantId = request.tenantId!;
+    const { id } = request.params;
+    const { status } = (request.body ?? {}) as { status?: string };
     if (status) {
       await prisma.tradeProgram.updateMany({ where: { id, tenant_id: tenantId }, data: { status } });
     }
@@ -1597,7 +1662,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
 
   // GET programs/execute — manually trigger daily trades for active programs (also called by cron)
   fastify.post('/api/v1/crm/programs/execute', { preHandler: auth }, async (request, reply) => {
-    const { tenantId } = request as any;
+    const tenantId = request.tenantId!;
     await executeDailyProgramTrades(tenantId, fastify, request.headers.authorization as string);
     reply.send({ data: { ok: true } });
   });
@@ -1607,8 +1672,8 @@ export async function crmRoutes(fastify: FastifyInstance) {
 // AUTO-TRADER ENGINE — generates daily trades for programs
 // ═══════════════════════════════════════
 
-async function executeDailyProgramTrades(tenantId: string, fastify: any, authHeader: string) {
-  const logger = require('pino')({ name: 'auto-trader' });
+async function executeDailyProgramTrades(tenantId: string, fastify: FastifyInstance, authHeader: string) {
+  const logger = pino({ name: 'auto-trader' });
 
   const programs = await prisma.tradeProgram.findMany({
     where: { tenant_id: tenantId, status: 'ACTIVE', end_date: { gt: new Date() } },

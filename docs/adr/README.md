@@ -14,6 +14,7 @@ decisions get a new ADR that references the old one.
 | 004 | Atomic financial flows via $transaction  | Accepted   |
 | 005 | TOTP-only 2FA (no SMS)                   | Accepted   |
 | 006 | No useCallback in CRM page (MetaMask SES)| Accepted   |
+| 007 | MiFIR/EMIR trade-export format           | Accepted   |
 
 ## Template
 

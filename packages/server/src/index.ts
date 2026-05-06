@@ -27,6 +27,7 @@ import { tenantRoutes } from './modules/tenants/routes';
 import { candlesRoute } from './modules/pricing/candles-route';
 import { crmRoutes } from './modules/crm/routes';
 import { emailRoutes } from './modules/crm/email-routes';
+import { reportsRoutes } from './modules/reports/routes';
 
 async function buildServer() {
   const fastify = Fastify({
@@ -181,6 +182,7 @@ async function buildServer() {
   await fastify.register(candlesRoute);
   await fastify.register(crmRoutes);
   await fastify.register(emailRoutes);
+  await fastify.register(reportsRoutes);
 
   // ─── Dealer Routes ───
   // Registered globally, but each route runs requireDealerMode middleware

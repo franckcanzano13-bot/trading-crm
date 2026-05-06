@@ -69,6 +69,10 @@ services:
       NODE_ENV: production
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
       RUN_AS_API_ONLY: "1"
+      # Sprint 7.5: dealer module disabled by default. Set to "1" to load it
+      # (only meaningful for B_BOOK_DEALER tenants). Regulated brokers should
+      # also build with --build-arg BUILD_PROFILE=regulated to strip the code.
+      ENABLE_DEALER_MODULE: ${ENABLE_DEALER_MODULE:-0}
     ports:
       - "5500:5500"
 

@@ -19,6 +19,15 @@
 # recurring OpenSSL/libc issues with Prisma engines.
 ARG NODE_VERSION=20.18.1
 
+# Sprint 7.5: BUILD_PROFILE=regulated strips the dealer module from the
+# source tree BEFORE tsc compiles. The resulting image has no dealer code
+# at all — satisfies the CLAUDE.md promise that "Pour les brokers régulés,
+# ce code n'existe pas dans leur runtime".
+#   docker build --build-arg BUILD_PROFILE=regulated ...
+# Default `full` keeps the dealer module so dealer-mode tenants can use it
+# (gated additionally by ENABLE_DEALER_MODULE=1 at runtime).
+ARG BUILD_PROFILE=full
+
 # ─── 1. deps ─────────────────────────────────────────────────────────────
 FROM node:${NODE_VERSION}-bookworm-slim AS deps
 WORKDIR /workspace
@@ -58,6 +67,17 @@ COPY packages/server ./packages/server
 # Prisma client, then compile server.
 RUN npm run build --workspace=@tradexlabel/shared
 RUN npx --workspace=@tradexlabel/server prisma generate
+
+# Sprint 7.5: regulated profile strips the dealer module from the source
+# tree before tsc. The resulting dist/ contains no dealer code, so even a
+# misconfigured ENABLE_DEALER_MODULE=1 cannot load it (the dynamic import
+# in index.ts will throw at boot, fail-loud).
+ARG BUILD_PROFILE
+RUN if [ "$BUILD_PROFILE" = "regulated" ]; then \
+      echo "[build] BUILD_PROFILE=regulated — removing dealer module"; \
+      rm -rf packages/server/src/modules/dealer; \
+    fi
+
 RUN npm run build --workspace=@tradexlabel/server
 
 

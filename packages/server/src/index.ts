@@ -191,10 +191,29 @@ async function buildServer() {
   await fastify.register(reportsRoutes);
 
   // ─── Dealer Routes ───
-  // Registered globally, but each route runs requireDealerMode middleware
-  // which checks tenant.execution_mode === 'B_BOOK_DEALER'. Other tenants get 403.
-  const { dealerRoutes } = await import('./modules/dealer/routes');
-  await fastify.register(dealerRoutes);
+  // Sprint 7.5: dealer module loads ONLY when the operator opts in via
+  // ENABLE_DEALER_MODULE=1. Two layers of isolation:
+  //   1. Build-time: the regulated Docker profile (BUILD_PROFILE=regulated)
+  //      strips packages/server/src/modules/dealer/ before tsc — the code
+  //      never enters dist/ and cannot be loaded.
+  //   2. Runtime: even in a "full" build, the import below is skipped when
+  //      the env flag is unset, so a misconfigured regulated tenant cannot
+  //      reach dealer routes (each route also runs requireDealerMode which
+  //      verifies tenant.execution_mode === 'B_BOOK_DEALER').
+  if (process.env.ENABLE_DEALER_MODULE === '1') {
+    try {
+      const { dealerRoutes } = await import('./modules/dealer/routes');
+      await fastify.register(dealerRoutes);
+      logger.info('[index] dealer module loaded (ENABLE_DEALER_MODULE=1)');
+    } catch (err) {
+      // dist/ doesn't include the module (regulated build) — fail loud so
+      // operators don't silently lose dealer functionality.
+      logger.error({ err }, '[index] ENABLE_DEALER_MODULE=1 but dealer module not present in build');
+      throw err;
+    }
+  } else {
+    logger.info('[index] dealer module disabled (set ENABLE_DEALER_MODULE=1 to enable)');
+  }
 
   // ─── WebSocket ───
   setupWebSocketServer(fastify);
@@ -255,4 +274,8 @@ async function start() {
 // Export for testing
 export { buildServer };
 
-start();
+// Sprint 7.5: skip auto-start when imported by the test runner. Tests
+// `import { buildServer }` and exercise the route table without listening.
+if (process.env.NODE_ENV !== 'test') {
+  start();
+}

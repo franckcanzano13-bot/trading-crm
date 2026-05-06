@@ -58,6 +58,9 @@ jobs:
       - name: TypeScript typecheck
         run: npx tsc --noEmit
 
+      - name: ESLint (informational)
+        run: npx eslint 'src/**/*.ts' --max-warnings=999 || true
+
       - name: npm audit (server)
         working-directory: .
         run: npm audit --omit=dev --audit-level=high || true

@@ -12,7 +12,10 @@ import { audit } from '../../shared/audit';
  * 3. Margin call / auto-liquidation — closes positions when margin level < stop-out
  */
 
-const MONITOR_INTERVAL_MS = 1000; // Check every second
+// Sprint 4 bonus: 250ms is closer to industry standard (cTrader/MT5 sub-second).
+// Auditor flagged 1s as too slow for crypto volatility.
+// Configurable via env to allow tuning under load.
+const MONITOR_INTERVAL_MS = Number(process.env.MONITOR_INTERVAL_MS) || 250;
 const STOP_OUT_LEVEL = 50; // 50% margin level = liquidation
 
 let intervalHandle: NodeJS.Timeout | null = null;

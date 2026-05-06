@@ -5,8 +5,11 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "dev:worker": "tsx watch src/workers/position-monitor-worker.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "start:api-only": "RUN_AS_API_ONLY=1 node dist/index.js",
+    "start:worker": "node dist/workers/position-monitor-worker.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "seed": "tsx src/seed.ts",

@@ -205,8 +205,14 @@ async function start() {
     // Start price engine
     priceEngine.start();
 
-    // Start position monitor (SL/TP, limit/stop orders, margin calls)
-    startPositionMonitor();
+    // Sprint 3.6: position monitor can be hosted in a separate worker process.
+    // Set RUN_AS_API_ONLY=1 to skip; run dist/workers/position-monitor-worker.js
+    // as a sibling process in production.
+    if (process.env.RUN_AS_API_ONLY === '1') {
+      logger.info('[index] RUN_AS_API_ONLY=1 — position monitor not started in this process');
+    } else {
+      startPositionMonitor();
+    }
 
     // Start server
     await fastify.listen({ port: config.PORT, host: config.HOST });

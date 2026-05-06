@@ -8,18 +8,34 @@ on:
 
 jobs:
   server:
-    name: Server (typecheck + tests)
+    name: Server (typecheck + tests on PostgreSQL)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
       run:
         working-directory: packages/server
 
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tradexlabel
+          POSTGRES_PASSWORD: ci_test
+          POSTGRES_DB: tradexlabel_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tradexlabel"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     env:
-      DATABASE_URL: 'file:./test.db'
+      DATABASE_URL: 'postgresql://tradexlabel:ci_test@localhost:5432/tradexlabel_test'
       JWT_SECRET: 'ci-test-jwt-secret-must-be-long-enough'
       JWT_REFRESH_SECRET: 'ci-test-refresh-secret-must-be-long-enough'
       NODE_ENV: 'test'
+      ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 
     steps:
       - uses: actions/checkout@v4
@@ -36,11 +52,15 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate
 
-      - name: Push schema to test SQLite
+      - name: Push schema to PostgreSQL
         run: npx prisma db push --skip-generate
 
       - name: TypeScript typecheck
         run: npx tsc --noEmit
+
+      - name: npm audit (server)
+        working-directory: .
+        run: npm audit --omit=dev --audit-level=high || true
 
       - name: Vitest
         run: npx vitest run

@@ -1,0 +1,52 @@
+# Sprint 7.2 — Keep the Docker build context lean.
+# Anything that isn't required to build the server image stays out so
+# `docker build` doesn't ship 400MB of Next.js / e2e tests / screenshots
+# into the daemon.
+
+# Workspaces / artifacts
+**/node_modules
+**/dist
+**/.next
+**/coverage
+**/.turbo
+**/tsconfig.tsbuildinfo
+
+# Local DB & backups
+**/*.db
+**/*.db-journal
+*.sql.gz
+
+# IDE / OS
+.git
+.github
+.vscode
+.idea
+.DS_Store
+*.log
+
+# Tests / fixtures we don't need at build time
+**/tests
+e2e
+playwright
+playwright.config.ts
+test-results
+screenshots
+take-shot.mjs
+test-*.mjs
+
+# Docs and meta
+*.md
+docs
+
+# Web package — server build doesn't need Next.js source
+packages/web
+
+# Local env files (never bake secrets into images)
+.env
+.env.*
+!.env.example
+
+# Dockerfile + compose self-references
+Dockerfile
+docker-compose.yml
+.dockerignore

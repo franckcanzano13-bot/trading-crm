@@ -19,11 +19,20 @@ import { logger } from '../shared/utils/index';
 import { prisma } from '../shared/database/prisma';
 import { priceEngine } from '../modules/pricing/price-engine';
 import { startPositionMonitor } from '../modules/trading/position-monitor';
+import { LeaderLock } from '../shared/leader';
 
 async function main() {
   logger.info('[Worker] Position monitor worker starting...');
   await prisma.$connect();
   logger.info('[Worker] DB connected');
+
+  // Sprint 5.3: leader election. Multiple worker replicas can run in HA;
+  // only the elected leader executes the SL/TP and liquidation loops to
+  // prevent duplicate work (idempotency would protect correctness, but
+  // we still want to avoid wasted DB load).
+  const leader = new LeaderLock('position-monitor');
+  logger.info('[Worker] waiting for leadership...');
+  await leader.acquireOrWait();
 
   // Position monitor needs live prices to decide SL/TP and liquidation
   priceEngine.start();
@@ -32,9 +41,11 @@ async function main() {
   startPositionMonitor();
   logger.info('[Worker] Position monitor running. Press Ctrl+C to stop.');
 
-  // Graceful shutdown
+  // Graceful shutdown — release the advisory lock so a hot standby can
+  // take over immediately without waiting for the connection timeout.
   const shutdown = async (signal: string) => {
     logger.info({ signal }, '[Worker] shutting down');
+    try { await leader.release(); } catch {}
     try { await prisma.$disconnect(); } catch {}
     process.exit(0);
   };

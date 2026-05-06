@@ -19,10 +19,48 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { authenticator } from 'otplib';
 import QRCode from 'qrcode';
+import crypto from 'crypto';
 import { requireAdmin } from '../../shared/middleware/auth';
 import { prisma } from '../../shared/database/prisma';
-import { encrypt, decrypt } from '../../shared/crypto';
+import { encrypt, decrypt, sha256 } from '../../shared/crypto';
 import { audit } from '../../shared/audit';
+
+// Sprint 5.1: backup codes — 8 single-use 10-char alphanumeric codes
+function generateBackupCodes(count = 8): string[] {
+  const codes: string[] = [];
+  for (let i = 0; i < count; i++) {
+    // Crockford alphabet (no confusing 0/O/1/I) split with a dash for readability
+    const raw = crypto.randomBytes(8).toString('base64').replace(/[+/=]/g, '').slice(0, 10).toUpperCase();
+    codes.push(`${raw.slice(0, 5)}-${raw.slice(5, 10)}`);
+  }
+  return codes;
+}
+
+/** Returns true if a normalized incoming code matches any stored hash; consumes that hash. */
+export function consumeBackupCode(storedHashesEncrypted: string, incomingCode: string):
+  | { ok: false }
+  | { ok: true; remainingHashesEncrypted: string; remainingCount: number } {
+  if (!storedHashesEncrypted) return { ok: false };
+  let hashes: string[];
+  try {
+    const decrypted = decrypt(storedHashesEncrypted);
+    if (!decrypted) return { ok: false };
+    hashes = JSON.parse(decrypted);
+    if (!Array.isArray(hashes)) return { ok: false };
+  } catch {
+    return { ok: false };
+  }
+  const normalized = incomingCode.replace(/[-\s]/g, '').toUpperCase();
+  const incomingHash = sha256(normalized);
+  const idx = hashes.indexOf(incomingHash);
+  if (idx === -1) return { ok: false };
+  hashes.splice(idx, 1);
+  return {
+    ok: true,
+    remainingHashesEncrypted: encrypt(JSON.stringify(hashes)),
+    remainingCount: hashes.length,
+  };
+}
 
 const VerifySchema = z.object({
   code: z.string().regex(/^\d{6}$/, 'Code must be 6 digits'),
@@ -120,11 +158,18 @@ export async function totpRoutes(fastify: FastifyInstance) {
       return reply.status(401).send({ error: 'Invalid code', code: 'INVALID_2FA_CODE' });
     }
 
-    // Already enabled? Idempotent success.
+    // Already enabled? Idempotent success — but don't regenerate backup codes.
+    let backupCodes: string[] | undefined;
     if (!admin.totp_enabled) {
+      // Sprint 5.1: generate 8 single-use backup codes on first activation.
+      // Store SHA-256 hashes (encrypted) — never plaintext.
+      backupCodes = generateBackupCodes(8);
+      const hashes = backupCodes.map(c => sha256(c.replace(/[-\s]/g, '')));
+      const encryptedHashes = encrypt(JSON.stringify(hashes));
+
       await prisma.tenantAdmin.update({
         where: { id: admin.id },
-        data: { totp_enabled: true },
+        data: { totp_enabled: true, totp_backup_codes: encryptedHashes },
       });
 
       await audit.log({
@@ -133,12 +178,55 @@ export async function totpRoutes(fastify: FastifyInstance) {
         actorType: (admin.role as any) || 'admin',
         action: '2FA_ENABLED',
         target: `tenant_admin:${admin.id}`,
-        details: { email: admin.email },
+        details: { email: admin.email, backup_codes_count: backupCodes.length },
         ip: request.ip,
       });
     }
 
-    return reply.send({ data: { enabled: true } });
+    // Sprint 5.1: return the backup codes ONCE — admin must save them now.
+    return reply.send({
+      data: {
+        enabled: true,
+        backup_codes: backupCodes,
+        backup_codes_warning: backupCodes
+          ? 'Save these codes in a safe place. Each can be used once if you lose your authenticator. They will not be shown again.'
+          : undefined,
+      },
+    });
+  });
+
+  // ─── POST /api/v1/admin/2fa/regenerate-backup-codes ──────────────────────
+  // Replaces all backup codes with a fresh set. Requires a valid TOTP code
+  // (not a backup code) to prevent locked-out attackers from rotating them.
+  fastify.post('/api/v1/admin/2fa/regenerate-backup-codes', { preHandler: [requireAdmin] }, async (request, reply) => {
+    const parsed = VerifySchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Validation failed', code: 'VALIDATION_ERROR', details: parsed.error.flatten() });
+    }
+    const adminId = request.userData!.sub;
+    const admin = await prisma.tenantAdmin.findUnique({ where: { id: adminId } });
+    if (!admin || !admin.totp_enabled || !admin.totp_secret) {
+      return reply.status(400).send({ error: '2FA not enabled', code: '2FA_NOT_ENABLED' });
+    }
+    const secret = decrypt(admin.totp_secret);
+    if (!secret || !authenticator.verify({ token: parsed.data.code, secret })) {
+      return reply.status(401).send({ error: 'Invalid code', code: 'INVALID_2FA_CODE' });
+    }
+
+    const backupCodes = generateBackupCodes(8);
+    const hashes = backupCodes.map(c => sha256(c.replace(/[-\s]/g, '')));
+    await prisma.tenantAdmin.update({
+      where: { id: admin.id },
+      data: { totp_backup_codes: encrypt(JSON.stringify(hashes)) },
+    });
+
+    await audit.log({
+      tenantId: admin.tenant_id, actorId: admin.id, actorType: (admin.role as any) || 'admin',
+      action: '2FA_BACKUP_CODES_REGENERATED', target: `tenant_admin:${admin.id}`,
+      details: { email: admin.email }, ip: request.ip,
+    });
+
+    return reply.send({ data: { backup_codes: backupCodes, count: backupCodes.length } });
   });
 
   // ─── POST /api/v1/admin/2fa/disable ────────────────────────────────────────

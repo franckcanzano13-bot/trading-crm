@@ -334,17 +334,41 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
       return reply.status(401).send({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
     }
 
-    // Sprint 2.8: TOTP 2FA gate. If the admin enrolled, password alone is not enough.
+    // Sprint 2.8 + 5.1: TOTP 2FA gate with backup code fallback.
+    let used2faPath: 'totp' | 'backup_code' | undefined;
     if (admin.totp_enabled && admin.totp_secret) {
       if (!code) {
-        // Password is correct, but we need a TOTP code. Tell the client to prompt.
+        // Password is correct, but we need a TOTP or backup code. Tell the client.
         return reply.status(200).send({ data: { requires_2fa: true } });
       }
       const { authenticator } = await import('otplib');
       const { decrypt } = await import('../../shared/crypto');
+      const { consumeBackupCode } = await import('../totp/routes');
       const secret = decrypt(admin.totp_secret);
-      const codeOk = secret ? authenticator.verify({ token: code, secret }) : false;
-      if (!codeOk) {
+      const totpOk = secret ? authenticator.verify({ token: code, secret }) : false;
+
+      if (totpOk) {
+        used2faPath = 'totp';
+      } else if (admin.totp_backup_codes) {
+        // Try backup code
+        const result = consumeBackupCode(admin.totp_backup_codes, code);
+        if (result.ok) {
+          // Persist consumption — backup code is now invalidated
+          await prisma.tenantAdmin.update({
+            where: { id: admin.id },
+            data: { totp_backup_codes: result.remainingHashesEncrypted },
+          });
+          await audit.log({
+            tenantId: admin.tenant_id, actorId: admin.id, actorType: 'admin',
+            action: '2FA_BACKUP_CODE_USED',
+            details: { email, remaining_codes: result.remainingCount },
+            ip: request.ip,
+          });
+          used2faPath = 'backup_code';
+        }
+      }
+
+      if (!used2faPath) {
         await audit.log({
           tenantId: admin.tenant_id, actorId: admin.id, actorType: 'admin',
           action: 'LOGIN_2FA_FAILED', details: { email }, ip: request.ip,
@@ -364,7 +388,7 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
     );
 
     // Sprint 2.3: audit successful admin login
-    await audit.log({ tenantId: admin.tenant_id, actorId: admin.id, actorType: 'admin', action: 'LOGIN_SUCCESS', details: { email, role: jwtRole, used_2fa: admin.totp_enabled }, ip: request.ip });
+    await audit.log({ tenantId: admin.tenant_id, actorId: admin.id, actorType: 'admin', action: 'LOGIN_SUCCESS', details: { email, role: jwtRole, used_2fa: admin.totp_enabled, twofa_path: used2faPath }, ip: request.ip });
 
     return reply.send({
       data: {

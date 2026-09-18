@@ -94,8 +94,8 @@ export default function AdminPage() {
   const [token, setToken] = useState('');
   const [tenantId, setTenantId] = useState('');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [email, setEmail] = useState('admin@demo.com');
-  const [password, setPassword] = useState('admin123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [loginTenantId, setLoginTenantId] = useState('c2d081a3-6aa4-415c-b422-4eba6cf7360c');
   const [error, setError] = useState('');
 

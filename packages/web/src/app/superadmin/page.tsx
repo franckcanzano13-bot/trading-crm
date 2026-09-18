@@ -6,8 +6,8 @@ import { useThemeStore } from '@/stores/theme-store';
 export default function SuperAdminPage() {
   const [token, setToken] = useState('');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [email, setEmail] = useState('admin@tradexlabel.com');
-  const [password, setPassword] = useState('superadmin123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [copiedId, setCopiedId] = useState('');

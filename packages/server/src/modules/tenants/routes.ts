@@ -137,6 +137,32 @@ export async function tenantRoutes(fastify: FastifyInstance) {
     return reply.send({ data: tenant });
   });
 
+  // Sprint 9.3 — Lost-device 2FA recovery (closes the ADR-005 follow-up).
+  // A superadmin clears an admin's TOTP secret + backup codes so they can
+  // enrol again from a new device. Scoped by tenant id in the URL so a typo
+  // in adminId cannot hit another broker's staff. Audited as 2FA_RESET with
+  // actor_type superadmin; the admin's next login will NOT ask for a code
+  // until they re-run /admin/2fa/setup + verify.
+  fastify.post<{ Params: { id: string; adminId: string } }>('/api/v1/super/tenants/:id/admins/:adminId/2fa/reset', {
+    preHandler: [requireSuperAdmin],
+  }, async (request, reply) => {
+    const { id: tenantId, adminId } = request.params;
+    const admin = await prisma.tenantAdmin.findFirst({ where: { id: adminId, tenant_id: tenantId } });
+    if (!admin) {
+      return reply.status(404).send({ error: 'Admin not found in this tenant', code: 'ADMIN_NOT_FOUND' });
+    }
+    const wasEnabled = admin.totp_enabled;
+    await prisma.tenantAdmin.update({
+      where: { id: admin.id },
+      data: { totp_secret: '', totp_enabled: false, totp_backup_codes: '' },
+    });
+    await auditLog(request, '2FA_RESET', `tenant_admin:${admin.id}`, {
+      tenant_id: tenantId, email: admin.email, was_enabled: wasEnabled,
+    });
+    logger.warn({ tenantId, adminId: admin.id, by: request.userData?.sub }, '[super] 2FA reset for tenant admin');
+    return reply.send({ data: { admin_id: admin.id, email: admin.email, totp_enabled: false, was_enabled: wasEnabled } });
+  });
+
   // Monitoring (superadmin)
   fastify.get('/api/v1/super/monitoring', {
     preHandler: [requireSuperAdmin],

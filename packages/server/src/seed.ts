@@ -2,6 +2,7 @@ import 'dotenv/config';
 import bcrypt from 'bcrypt';
 import { prisma } from './shared/database/prisma';
 import { TenantQuery } from './shared/database/tenant-queries';
+import { recordDeposit } from './shared/segregation';
 import { ALL_INSTRUMENTS, BCRYPT_SALT_ROUNDS } from '@tradexlabel/shared';
 
 async function seed() {
@@ -113,14 +114,23 @@ async function seed() {
         password_hash: traderPw,
         name: 'Demo Trader',
       });
-      const account = await tq.createAccount(trader.id, 100);
       const depositAmount = BigInt(1000000); // $10,000 in cents
-      await tq.updateAccountBalance(account.id, depositAmount, BigInt(0), depositAmount);
-      await tq.createTransaction({
-        account_id: account.id,
-        type: 'DEPOSIT',
-        amount: depositAmount,
-        description: 'Initial demo deposit',
+      // Sprint 8.4: seed the demo balance through the segregation ledger so a
+      // fresh dev database reports drift_cents = 0 instead of DRIFT_DETECTED.
+      await prisma.$transaction(async (tx) => {
+        const txq = tq.withTx(tx);
+        const account = await txq.createAccount(trader.id, { leverage: 100, balance: depositAmount });
+        const transaction = await txq.createTransaction({
+          account_id: account.id,
+          type: 'DEPOSIT',
+          amount: depositAmount,
+          description: 'Initial demo deposit',
+        });
+        await recordDeposit(tx, {
+          tenantId: tenant.id, accountId: account.id,
+          amountCents: depositAmount, reference: `transaction:${transaction.id}`,
+          description: 'Initial demo deposit',
+        });
       });
       console.log(`Demo trader: trader@demo.com ($10,000)`);
     }

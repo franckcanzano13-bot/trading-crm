@@ -30,6 +30,7 @@ describe('Sprint 8.3 — CRM lead conversion contract', () => {
   });
 
   afterAll(async () => {
+    await prisma.clientFundsLedger.deleteMany({ where: { tenant_id: tenantId } }).catch(() => {});
     await prisma.transaction.deleteMany({ where: { tenant_id: tenantId } }).catch(() => {});
     await prisma.account.deleteMany({ where: { tenant_id: tenantId } }).catch(() => {});
     await prisma.user.deleteMany({ where: { tenant_id: tenantId } }).catch(() => {});
@@ -72,10 +73,33 @@ describe('Sprint 8.3 — CRM lead conversion contract', () => {
     expect(tx?.type).toBe('DEPOSIT');
     expect(tx?.amount).toBe(BigInt(25000));
 
+    // Sprint 8.4: the FTD must be mirrored in the client funds segregation ledger.
+    const ledger = await prisma.clientFundsLedger.findMany({ where: { tenant_id: tenantId, account_id: account!.id } });
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0].pool).toBe('CLIENT_TRUST');
+    expect(ledger[0].kind).toBe('DEPOSIT');
+    expect(ledger[0].amount_cents).toBe(BigInt(25000));
+    expect(ledger[0].reference).toBe(`transaction:${tx!.id}`);
+
     const updatedLead = await prisma.lead.findUnique({ where: { id: lead.id } });
     expect(updatedLead!.status).toBe('CONVERTED');
     expect(updatedLead!.converted_user_id).toBe(user!.id);
     expect(updatedLead!.ftd_amount).toBe(BigInt(25000));
+  });
+
+  it('converts without a deposit: zero balance, no transaction, no ledger row', async () => {
+    const lead = await prisma.lead.create({
+      data: { tenant_id: tenantId, email: `nodep-${Date.now()}@cv.test`, first_name: 'N', last_name: 'D' },
+    });
+    const res = await fastify.inject({
+      method: 'POST', url: `/api/v1/crm/leads/${lead.id}/convert`,
+      headers: { authorization: `Bearer ${token}`, 'x-tenant-id': tenantId }, payload: {},
+    });
+    expect(res.statusCode).toBe(200);
+    const account = await prisma.account.findFirst({ where: { tenant_id: tenantId, id: res.json().data.account_id } });
+    expect(account!.balance).toBe(BigInt(0));
+    expect(await prisma.transaction.count({ where: { account_id: account!.id } })).toBe(0);
+    expect(await prisma.clientFundsLedger.count({ where: { account_id: account!.id } })).toBe(0);
   });
 
   it('refuses to convert the same lead twice', async () => {

@@ -8,6 +8,7 @@ import { sha256 } from '../../shared/crypto';
 import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { BCRYPT_SALT_ROUNDS } from '@tradexlabel/shared';
+import { recordDeposit } from '../../shared/segregation';
 
 const logger = pino({ name: 'crm' });
 
@@ -337,7 +338,6 @@ export async function crmRoutes(fastify: FastifyInstance) {
   // POST /api/v1/crm/leads/:id/convert — convert lead to client
   fastify.post<{ Params: { id: string } }>('/api/v1/crm/leads/:id/convert', { preHandler: auth }, async (request, reply) => {
     const tenantId = request.tenantId!;
-    const tenantQuery = request.tenantQuery!;
     const { id } = request.params;
     const { password, deposit_amount } = (request.body ?? {}) as { password?: string; deposit_amount?: number };
 
@@ -349,42 +349,49 @@ export async function crmRoutes(fastify: FastifyInstance) {
     // dependency of the server. Every conversion attempt failed with
     // MODULE_NOT_FOUND. Use the same bcrypt as auth/routes.ts.
     const hash = await bcrypt.hash(password || 'Welcome123!', BCRYPT_SALT_ROUNDS);
-
-    // Create user
-    const user = await tenantQuery.createUser({
-      email: lead.email,
-      password_hash: hash,
-      name: `${lead.first_name} ${lead.last_name}`,
-      phone: lead.phone,
-      country: lead.country,
-      status: 'ACTIVE',
-      kyc_status: 'NONE',
-      lead_id: lead.id,
-    });
-
-    // Create account
     const depositCents = deposit_amount ? Math.round(deposit_amount * 100) : 0;
-    const account = await tenantQuery.createAccount(user.id, {
-      currency: 'USD',
-      balance: BigInt(depositCents),
-      equity: BigInt(depositCents),
-    });
 
-    if (depositCents > 0) {
-      await prisma.transaction.create({
-        data: { tenant_id: tenantId, account_id: account.id, type: 'DEPOSIT', amount: BigInt(depositCents), description: 'Initial deposit (CRM conversion)' },
+    // Sprint 8.4: user + account + FTD transaction + segregation ledger + lead
+    // status are one atomic unit. The initial deposit used to be written
+    // straight into account.balance with no CLIENT_TRUST entry, so every CRM
+    // conversion with an FTD produced segregation drift (Sprint 7.6 gap).
+    const { user, account } = await prisma.$transaction(async (tx) => {
+      const tq = request.tenantQuery!.withTx(tx);
+      const user = await tq.createUser({
+        email: lead.email,
+        password_hash: hash,
+        name: `${lead.first_name} ${lead.last_name}`,
+        phone: lead.phone,
+        country: lead.country,
+        status: 'ACTIVE',
+        kyc_status: 'NONE',
+        lead_id: lead.id,
       });
-    }
-
-    // Update lead
-    await prisma.lead.update({
-      where: { id },
-      data: {
-        status: 'CONVERTED',
-        converted_user_id: user.id,
-        ftd_amount: BigInt(depositCents),
-        ftd_date: depositCents > 0 ? new Date() : undefined,
-      },
+      const account = await tq.createAccount(user.id, {
+        currency: 'USD',
+        balance: BigInt(depositCents),
+        equity: BigInt(depositCents),
+      });
+      if (depositCents > 0) {
+        const transaction = await tx.transaction.create({
+          data: { tenant_id: tenantId, account_id: account.id, type: 'DEPOSIT', amount: BigInt(depositCents), description: 'Initial deposit (CRM conversion)' },
+        });
+        await recordDeposit(tx, {
+          tenantId, accountId: account.id,
+          amountCents: BigInt(depositCents), reference: `transaction:${transaction.id}`,
+          description: 'Initial deposit (CRM conversion)',
+        });
+      }
+      await tx.lead.update({
+        where: { id },
+        data: {
+          status: 'CONVERTED',
+          converted_user_id: user.id,
+          ftd_amount: BigInt(depositCents),
+          ftd_date: depositCents > 0 ? new Date() : undefined,
+        },
+      });
+      return { user, account };
     });
 
     // Affiliate CPA commission if applicable

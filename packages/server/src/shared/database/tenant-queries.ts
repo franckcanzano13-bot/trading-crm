@@ -1,18 +1,31 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from './prisma';
+
+/** Either the global client or a transaction client from prisma.$transaction. */
+export type DbClient = typeof prisma | Prisma.TransactionClient;
 
 /**
  * Tenant-scoped query helper using Prisma ORM with tenant_id filtering.
  */
 export class TenantQuery {
-  constructor(private tenantId: string) {}
+  constructor(private tenantId: string, private db: DbClient = prisma) {}
+
+  /**
+   * Sprint 8.4: return a TenantQuery bound to a transaction client so that
+   * multi-row financial flows (user + account + transaction + segregation
+   * ledger) can stay inside one atomic prisma.$transaction.
+   */
+  withTx(tx: Prisma.TransactionClient): TenantQuery {
+    return new TenantQuery(this.tenantId, tx);
+  }
 
   // ─── Users ───
   async findUserByEmail(email: string) {
-    return prisma.user.findFirst({ where: { tenant_id: this.tenantId, email } });
+    return this.db.user.findFirst({ where: { tenant_id: this.tenantId, email } });
   }
 
   async findUserById(id: string) {
-    return prisma.user.findFirst({ where: { id, tenant_id: this.tenantId } });
+    return this.db.user.findFirst({ where: { id, tenant_id: this.tenantId } });
   }
 
   async createUser(data: {
@@ -25,13 +38,13 @@ export class TenantQuery {
     kyc_status?: string;
     lead_id?: string | null;
   }) {
-    return prisma.user.create({
+    return this.db.user.create({
       data: { ...data, tenant_id: this.tenantId },
     });
   }
 
   async listUsers(limit = 50, offset = 0) {
-    return prisma.user.findMany({
+    return this.db.user.findMany({
       where: { tenant_id: this.tenantId },
       select: {
         id: true, email: true, name: true, status: true, kyc_status: true, created_at: true,
@@ -45,7 +58,7 @@ export class TenantQuery {
 
   async updateUser(id: string, data: { status?: string; kyc_status?: string; name?: string }) {
     // VULN tenant_id filter: ensure update is scoped to current tenant
-    const result = await prisma.user.updateMany({
+    const result = await this.db.user.updateMany({
       where: { id, tenant_id: this.tenantId },
       data: {
         ...(data.status && { status: data.status }),
@@ -54,7 +67,7 @@ export class TenantQuery {
       },
     });
     if (result.count === 0) return null;
-    return prisma.user.findUnique({ where: { id } });
+    return this.db.user.findUnique({ where: { id } });
   }
 
   // ─── Accounts ───
@@ -66,7 +79,7 @@ export class TenantQuery {
     // as `leverage` for backward compatibility with older call sites.
     const o = typeof opts === 'number' ? { leverage: opts } : opts;
     const balance = o.balance ?? BigInt(0);
-    return prisma.account.create({
+    return this.db.account.create({
       data: {
         tenant_id: this.tenantId,
         user_id: userId,
@@ -79,11 +92,11 @@ export class TenantQuery {
   }
 
   async findAccountByUserId(userId: string) {
-    return prisma.account.findFirst({ where: { tenant_id: this.tenantId, user_id: userId } });
+    return this.db.account.findFirst({ where: { tenant_id: this.tenantId, user_id: userId } });
   }
 
   async findAccountById(id: string) {
-    return prisma.account.findFirst({ where: { id, tenant_id: this.tenantId } });
+    return this.db.account.findFirst({ where: { id, tenant_id: this.tenantId } });
   }
 
   async updateAccountBalance(accountId: string, balance: bigint, marginUsed: bigint, equity: bigint) {
@@ -91,50 +104,50 @@ export class TenantQuery {
     const safeBalance = balance < BigInt(0) ? BigInt(0) : balance;
     const safeEquity = equity < BigInt(0) ? BigInt(0) : equity;
     const safeMargin = marginUsed < BigInt(0) ? BigInt(0) : marginUsed;
-    const result = await prisma.account.updateMany({
+    const result = await this.db.account.updateMany({
       where: { id: accountId, tenant_id: this.tenantId },
       data: { balance: safeBalance, margin_used: safeMargin, equity: safeEquity },
     });
     if (result.count === 0) return null;
-    return prisma.account.findUnique({ where: { id: accountId } });
+    return this.db.account.findUnique({ where: { id: accountId } });
   }
 
   // ─── Instruments ───
   async listInstruments(activeOnly = true) {
-    return prisma.instrument.findMany({
+    return this.db.instrument.findMany({
       where: { tenant_id: this.tenantId, ...(activeOnly && { is_active: true }) },
       orderBy: { symbol: 'asc' },
     });
   }
 
   async findInstrumentBySymbol(symbol: string) {
-    return prisma.instrument.findFirst({ where: { tenant_id: this.tenantId, symbol } });
+    return this.db.instrument.findFirst({ where: { tenant_id: this.tenantId, symbol } });
   }
 
   async findInstrumentById(id: string) {
-    return prisma.instrument.findFirst({ where: { id, tenant_id: this.tenantId } });
+    return this.db.instrument.findFirst({ where: { id, tenant_id: this.tenantId } });
   }
 
   async upsertInstrument(data: {
     symbol: string; display_name: string; type: string;
     pip_size: number; lot_size: number; base_spread: number;
   }) {
-    const existing = await prisma.instrument.findFirst({
+    const existing = await this.db.instrument.findFirst({
       where: { tenant_id: this.tenantId, symbol: data.symbol },
     });
     if (existing) {
-      return prisma.instrument.update({
+      return this.db.instrument.update({
         where: { id: existing.id },
         data: { display_name: data.display_name, type: data.type, pip_size: data.pip_size, lot_size: data.lot_size, base_spread: data.base_spread },
       });
     }
-    return prisma.instrument.create({
+    return this.db.instrument.create({
       data: { ...data, tenant_id: this.tenantId },
     });
   }
 
   async updateInstrument(id: string, data: { spread_markup?: number; is_active?: boolean; min_volume?: number; max_volume?: number }) {
-    const result = await prisma.instrument.updateMany({
+    const result = await this.db.instrument.updateMany({
       where: { id, tenant_id: this.tenantId },
       data: {
         ...(data.spread_markup !== undefined && { spread_markup: data.spread_markup }),
@@ -144,7 +157,7 @@ export class TenantQuery {
       },
     });
     if (result.count === 0) return null;
-    return prisma.instrument.findUnique({ where: { id } });
+    return this.db.instrument.findUnique({ where: { id } });
   }
 
   // ─── Trades ───
@@ -155,7 +168,7 @@ export class TenantQuery {
     swap?: bigint; // reused to store invest_amount for dealer trades
     pnl_target?: bigint; scheduled_close_at?: Date;
   }) {
-    return prisma.trade.create({
+    return this.db.trade.create({
       data: {
         tenant_id: this.tenantId,
         user_id: data.user_id,
@@ -176,7 +189,7 @@ export class TenantQuery {
 
   /** Find dealer trades that are past their scheduled close time */
   async findTradesDueForClose() {
-    return prisma.trade.findMany({
+    return this.db.trade.findMany({
       where: {
         tenant_id: this.tenantId,
         status: 'OPEN',
@@ -190,7 +203,7 @@ export class TenantQuery {
   }
 
   async findOpenTrades(userId?: string) {
-    const trades = await prisma.trade.findMany({
+    const trades = await this.db.trade.findMany({
       where: {
         tenant_id: this.tenantId,
         status: 'OPEN',
@@ -211,26 +224,26 @@ export class TenantQuery {
   }
 
   async updateTradeSLTP(id: string, stopLoss: number | null, takeProfit: number | null) {
-    const result = await prisma.trade.updateMany({
+    const result = await this.db.trade.updateMany({
       where: { id, tenant_id: this.tenantId },
       data: { stop_loss: stopLoss, take_profit: takeProfit },
     });
     if (result.count === 0) return null;
-    return prisma.trade.findUnique({ where: { id } });
+    return this.db.trade.findUnique({ where: { id } });
   }
 
   async closeTrade(id: string, closePrice: bigint, pnl: bigint, status = 'CLOSED') {
     // Idempotent close: only updates if still OPEN — prevents double-close races
-    const result = await prisma.trade.updateMany({
+    const result = await this.db.trade.updateMany({
       where: { id, tenant_id: this.tenantId, status: 'OPEN' },
       data: { close_price: closePrice, pnl, status, close_time: new Date() },
     });
     if (result.count === 0) return null;
-    return prisma.trade.findUnique({ where: { id } });
+    return this.db.trade.findUnique({ where: { id } });
   }
 
   async findTradeById(id: string) {
-    const trade = await prisma.trade.findFirst({
+    const trade = await this.db.trade.findFirst({
       where: { id, tenant_id: this.tenantId },
       include: {
         instrument: { select: { symbol: true, display_name: true, pip_size: true, lot_size: true } },
@@ -247,7 +260,7 @@ export class TenantQuery {
   }
 
   async findTradeHistory(userId: string, limit = 50, offset = 0) {
-    const trades = await prisma.trade.findMany({
+    const trades = await this.db.trade.findMany({
       where: { tenant_id: this.tenantId, user_id: userId, NOT: { status: 'OPEN' } },
       include: { instrument: { select: { symbol: true, display_name: true } } },
       orderBy: { close_time: 'desc' },
@@ -262,7 +275,7 @@ export class TenantQuery {
     user_id: string; instrument_id: string; type: string; side: string;
     volume: number; price?: bigint; stop_loss?: number; take_profit?: number;
   }) {
-    return prisma.order.create({
+    return this.db.order.create({
       data: {
         tenant_id: this.tenantId,
         user_id: data.user_id,
@@ -278,7 +291,7 @@ export class TenantQuery {
   }
 
   async findPendingOrders(userId?: string) {
-    return prisma.order.findMany({
+    return this.db.order.findMany({
       where: { tenant_id: this.tenantId, status: 'PENDING', ...(userId && { user_id: userId }) },
       include: { instrument: { select: { symbol: true, display_name: true } } },
       orderBy: { created_at: 'desc' },
@@ -292,23 +305,23 @@ export class TenantQuery {
    * @param userId Optional: also enforce ownership (prevents IDOR — VULN-003)
    */
   async updateOrderStatus(id: string, status: string, userId?: string) {
-    const result = await prisma.order.updateMany({
+    const result = await this.db.order.updateMany({
       where: { id, tenant_id: this.tenantId, ...(userId && { user_id: userId }) },
       data: { status, ...(status === 'FILLED' && { filled_at: new Date() }) },
     });
     if (result.count === 0) return null;
-    return prisma.order.findUnique({ where: { id } });
+    return this.db.order.findUnique({ where: { id } });
   }
 
   // ─── Transactions ───
   async createTransaction(data: { account_id: string; type: string; amount: bigint; description: string }) {
-    return prisma.transaction.create({
+    return this.db.transaction.create({
       data: { ...data, tenant_id: this.tenantId },
     });
   }
 
   async findTransactions(accountId: string, limit = 50, offset = 0) {
-    return prisma.transaction.findMany({
+    return this.db.transaction.findMany({
       where: { tenant_id: this.tenantId, account_id: accountId },
       orderBy: { created_at: 'desc' },
       take: limit,
@@ -321,11 +334,11 @@ export class TenantQuery {
     instrument_id: string; timeframe: string;
     open: number; high: number; low: number; close: number; volume: number; timestamp: Date;
   }) {
-    const existing = await prisma.priceHistory.findFirst({
+    const existing = await this.db.priceHistory.findFirst({
       where: { instrument_id: data.instrument_id, timeframe: data.timeframe, timestamp: data.timestamp },
     });
     if (existing) {
-      return prisma.priceHistory.update({
+      return this.db.priceHistory.update({
         where: { id: existing.id },
         data: {
           high: Math.max(existing.high, data.high),
@@ -335,13 +348,13 @@ export class TenantQuery {
         },
       });
     }
-    return prisma.priceHistory.create({
+    return this.db.priceHistory.create({
       data: { ...data, tenant_id: this.tenantId },
     });
   }
 
   async getCandles(instrumentId: string, timeframe: string, limit = 500) {
-    return prisma.priceHistory.findMany({
+    return this.db.priceHistory.findMany({
       where: { tenant_id: this.tenantId, instrument_id: instrumentId, timeframe },
       orderBy: { timestamp: 'desc' },
       take: limit,
@@ -353,7 +366,7 @@ export class TenantQuery {
     trade_id: string; dealer_id: string; action: string;
     original_price?: bigint; modified_price?: bigint; reason: string;
   }) {
-    return prisma.dealerIntervention.create({
+    return this.db.dealerIntervention.create({
       data: {
         tenant_id: this.tenantId,
         trade_id: data.trade_id,
@@ -367,7 +380,7 @@ export class TenantQuery {
   }
 
   async findDealerInterventions(limit = 50, offset = 0) {
-    return prisma.dealerIntervention.findMany({
+    return this.db.dealerIntervention.findMany({
       where: { tenant_id: this.tenantId },
       include: {
         trade: {
@@ -381,14 +394,14 @@ export class TenantQuery {
   }
 
   async getDealerSettings(tenantId: string) {
-    return prisma.dealerSettings.findFirst({ where: { tenant_id: tenantId } });
+    return this.db.dealerSettings.findFirst({ where: { tenant_id: tenantId } });
   }
 
   async upsertDealerSettings(tenantId: string, data: {
     max_slippage?: number; requote_enabled?: boolean;
     spread_multiplier?: number; auto_delay_ms?: number;
   }) {
-    return prisma.dealerSettings.upsert({
+    return this.db.dealerSettings.upsert({
       where: { tenant_id: tenantId },
       create: {
         tenant_id: tenantId,
@@ -409,10 +422,10 @@ export class TenantQuery {
   // ─── Dashboard Stats ───
   async getDashboardStats() {
     const [totalUsers, accountStats, tradeStats, openPositions] = await Promise.all([
-      prisma.user.count({ where: { tenant_id: this.tenantId } }),
-      prisma.account.aggregate({ where: { tenant_id: this.tenantId }, _count: true, _sum: { balance: true } }),
-      prisma.trade.aggregate({ where: { tenant_id: this.tenantId, status: 'CLOSED' }, _count: true, _sum: { pnl: true } }),
-      prisma.trade.count({ where: { tenant_id: this.tenantId, status: 'OPEN' } }),
+      this.db.user.count({ where: { tenant_id: this.tenantId } }),
+      this.db.account.aggregate({ where: { tenant_id: this.tenantId }, _count: true, _sum: { balance: true } }),
+      this.db.trade.aggregate({ where: { tenant_id: this.tenantId, status: 'CLOSED' }, _count: true, _sum: { pnl: true } }),
+      this.db.trade.count({ where: { tenant_id: this.tenantId, status: 'OPEN' } }),
     ]);
     return {
       total_users: totalUsers,

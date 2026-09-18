@@ -13,7 +13,7 @@ Enterprise-grade white-label trading platform with built-in CRM, dealing desk, K
 
 ## Stack
 
-**Backend** — Node.js 20+, Fastify, Prisma ORM, SQLite (dev) / PostgreSQL (prod), JWT auth, WebSocket, Zod validation
+**Backend** — Node.js 20+, Fastify, Prisma ORM, PostgreSQL 16 (SQLite optional for offline dev), JWT auth, WebSocket, Zod validation
 **Frontend** — Next.js 14 (App Router), Tailwind CSS, Zustand, TradingView Lightweight Charts
 **DevOps** — Docker Compose for PostgreSQL + Redis
 
@@ -62,15 +62,18 @@ Edit `packages/server/.env`:
 
 ### 3. Database
 
-Default is SQLite (zero setup):
+Default is PostgreSQL (same as CI and production). Start it with Docker Compose, then apply the versioned migrations:
 
 ```bash
+docker compose up -d postgres redis
 cd packages/server
-npx prisma db push
+npx prisma migrate deploy
 npx prisma generate
 ```
 
-For production with PostgreSQL, update `DATABASE_URL` and run the same commands.
+`DATABASE_URL` must be a `postgresql://` URL (see `.env.example`).
+
+Offline dev without Docker: `./scripts/use-sqlite.sh` flips the Prisma provider to SQLite, then `DATABASE_URL=file:./dev.db npx prisma db push`. The Postgres-only tests (audit immutability, tenant isolation, TOTP, dealer isolation) are skipped in that mode. Revert with `git checkout packages/server/prisma/schema.prisma`.
 
 ### 4. Build & run
 

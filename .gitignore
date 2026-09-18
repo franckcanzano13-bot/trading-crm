@@ -15,3 +15,6 @@ prisma/*.db
 .claude/plugins/superpowers/
 .claude/settings.local.json
 FIXES_NOTES.md
+
+# Sprint 9.6: embedded PostgreSQL for dev machines without Docker (scripts/dev-postgres.mjs)
+.local/

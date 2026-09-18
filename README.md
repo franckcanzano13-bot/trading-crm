@@ -13,9 +13,9 @@ Enterprise-grade white-label trading platform with built-in CRM, dealing desk, K
 
 ## Stack
 
-**Backend** — Node.js 20+, Fastify, Prisma ORM, PostgreSQL 16 (SQLite optional for offline dev), JWT auth, WebSocket, Zod validation
-**Frontend** — Next.js 14 (App Router), Tailwind CSS, Zustand, TradingView Lightweight Charts
-**DevOps** — Docker Compose for PostgreSQL + Redis
+**Backend** — Node.js 20+, Fastify 5, Prisma ORM, PostgreSQL 16 (SQLite optional for offline dev), JWT auth, WebSocket, Zod validation
+**Frontend** — Next.js 16 (App Router, standalone output), React 19, Tailwind CSS, Zustand, TradingView Lightweight Charts
+**DevOps** — Docker images for api (full / regulated profiles) and web, Docker Compose, GitHub Actions (typecheck, lint, audit, tests on PostgreSQL, image builds)
 
 ## Project structure
 
@@ -73,7 +73,13 @@ npx prisma generate
 
 `DATABASE_URL` must be a `postgresql://` URL (see `.env.example`).
 
-Offline dev without Docker: `./scripts/use-sqlite.sh` flips the Prisma provider to SQLite, then `DATABASE_URL=file:./dev.db npx prisma db push`. The Postgres-only tests (audit immutability, tenant isolation, TOTP, dealer isolation) are skipped in that mode. Revert with `git checkout packages/server/prisma/schema.prisma`.
+No Docker on your machine (VM without nested virtualization, locked-down laptop)? Run a real PostgreSQL without it:
+
+```bash
+node scripts/dev-postgres.mjs        # downloads a Postgres binary once into .local/pg, starts on 5432
+```
+
+Then apply migrations and seed as above. Last resort, offline dev on SQLite: `./scripts/use-sqlite.sh` flips the Prisma provider to SQLite, then `DATABASE_URL=file:./dev.db npx prisma db push`. The Postgres-only tests (audit immutability, tenant isolation, TOTP, dealer isolation) are skipped in that mode. Revert with `git checkout packages/server/prisma/schema.prisma`.
 
 ### 4. Build & run
 
@@ -121,3 +127,29 @@ npx vitest run
 ## License
 
 Proprietary. All rights reserved.
+
+## Docker images
+
+```bash
+# API — full profile (dealer module compiled in, gated by ENABLE_DEALER_MODULE at runtime)
+docker build -f packages/server/Dockerfile -t tradexlabel/api:latest .
+# API — regulated profile (dealer module removed from the source tree before compilation)
+docker build -f packages/server/Dockerfile --build-arg BUILD_PROFILE=regulated -t tradexlabel/api:regulated .
+# Web — NEXT_PUBLIC_API_URL is inlined at build time (one image per public API origin)
+docker build -f packages/web/Dockerfile --build-arg NEXT_PUBLIC_API_URL=https://api.broker.example -t tradexlabel/web:latest .
+# Everything together
+docker compose up --build
+```
+
+CI builds both profiles of the API image and the web image on every push, asserts the regulated image contains no dealer code, and boots each image once.
+
+## Smoke test against a running API
+
+```bash
+SMOKE_TENANT_ID=<demo tenant id from seed> SMOKE_OTHER_TENANT_ID=<dealer tenant id> \
+SMOKE_METRICS_TOKEN=<METRICS_AUTH_TOKEN> npm run smoke -- http://127.0.0.1:5500
+```
+
+## What can be sold to a broker
+
+See [docs/OFFERING.md](docs/OFFERING.md) — the catalogue of options per execution mode, what is included, what is configurable, and what is still roadmap.

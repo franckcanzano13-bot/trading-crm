@@ -1,0 +1,38 @@
+# Sprint 9.4 — BuildKit picks this file (next to packages/web/Dockerfile)
+# over the root .dockerignore, which excludes packages/web entirely for the
+# server image. Keep only what the web build needs.
+**/node_modules
+**/dist
+**/.next
+**/coverage
+**/.turbo
+**/tsconfig.tsbuildinfo
+**/*.db
+**/*.db-journal
+.git
+.github
+.vscode
+.idea
+.DS_Store
+*.log
+**/tests
+e2e
+playwright
+playwright.config.ts
+test-results
+screenshots
+take-shot.mjs
+test-*.mjs
+*.md
+docs
+scripts
+.local
+.env
+.env.*
+!.env.example
+Dockerfile
+docker-compose.yml
+.dockerignore
+packages/server/src
+packages/server/prisma
+packages/server/tests

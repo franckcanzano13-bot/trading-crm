@@ -93,6 +93,25 @@ services:
       NODE_ENV: production
     command: ["node", "packages/server/dist/workers/position-monitor-worker.js"]
 
+  # Sprint 9.4 — Next.js front-end (standalone build, packages/web/Dockerfile).
+  # NEXT_PUBLIC_API_URL is baked into the browser bundle at build time: set it
+  # to the public API origin (e.g. https://api.broker.example) or leave it
+  # empty so the browser calls /api and /ws on the web origin and Next's
+  # rewrites proxy them to the api container.
+  web:
+    build:
+      context: .
+      dockerfile: packages/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-}
+        API_INTERNAL_URL: http://api:5500
+    image: tradexlabel/web:dev
+    container_name: tradexlabel-web
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+
 volumes:
   pgdata:
   redisdata:

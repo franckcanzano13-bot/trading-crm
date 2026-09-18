@@ -6,6 +6,8 @@ import { tenantResolver } from '../../shared/middleware/tenant-resolver';
 import { requireAdmin } from '../../shared/middleware/auth';
 import { sha256 } from '../../shared/crypto';
 import crypto from 'crypto';
+import bcrypt from 'bcrypt';
+import { BCRYPT_SALT_ROUNDS } from '@tradexlabel/shared';
 
 const logger = pino({ name: 'crm' });
 
@@ -335,12 +337,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
   // POST /api/v1/crm/leads/:id/convert — convert lead to client
   fastify.post<{ Params: { id: string } }>('/api/v1/crm/leads/:id/convert', { preHandler: auth }, async (request, reply) => {
     const tenantId = request.tenantId!;
-    // tenantQuery is loosely-typed here because the legacy call sites pass extra fields
-    // (phone/country/status/kyc_status) that the TenantQuery#createUser signature does not declare.
-    const tenantQuery = request.tenantQuery as unknown as {
-      createUser: (data: Record<string, unknown>) => Promise<{ id: string }>;
-      createAccount: (data: Record<string, unknown>) => Promise<{ id: string }>;
-    };
+    const tenantQuery = request.tenantQuery!;
     const { id } = request.params;
     const { password, deposit_amount } = (request.body ?? {}) as { password?: string; deposit_amount?: number };
 
@@ -348,8 +345,10 @@ export async function crmRoutes(fastify: FastifyInstance) {
     if (!lead) return reply.status(404).send({ error: 'Lead not found', code: 'NOT_FOUND' });
     if (lead.status === 'CONVERTED') return reply.status(400).send({ error: 'Already converted', code: 'ALREADY_CONVERTED' });
 
-    const bcrypt = require('bcryptjs');
-    const hash = await bcrypt.hash(password || 'Welcome123!', 10);
+    // Sprint 8.3: this used to `require('bcryptjs')`, a package that is not a
+    // dependency of the server. Every conversion attempt failed with
+    // MODULE_NOT_FOUND. Use the same bcrypt as auth/routes.ts.
+    const hash = await bcrypt.hash(password || 'Welcome123!', BCRYPT_SALT_ROUNDS);
 
     // Create user
     const user = await tenantQuery.createUser({
@@ -360,12 +359,12 @@ export async function crmRoutes(fastify: FastifyInstance) {
       country: lead.country,
       status: 'ACTIVE',
       kyc_status: 'NONE',
+      lead_id: lead.id,
     });
 
     // Create account
     const depositCents = deposit_amount ? Math.round(deposit_amount * 100) : 0;
-    const account = await tenantQuery.createAccount({
-      user_id: user.id,
+    const account = await tenantQuery.createAccount(user.id, {
       currency: 'USD',
       balance: BigInt(depositCents),
       equity: BigInt(depositCents),

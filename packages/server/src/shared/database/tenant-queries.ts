@@ -15,7 +15,16 @@ export class TenantQuery {
     return prisma.user.findFirst({ where: { id, tenant_id: this.tenantId } });
   }
 
-  async createUser(data: { email: string; password_hash: string; name: string }) {
+  async createUser(data: {
+    email: string;
+    password_hash: string;
+    name: string;
+    phone?: string;
+    country?: string;
+    status?: string;
+    kyc_status?: string;
+    lead_id?: string | null;
+  }) {
     return prisma.user.create({
       data: { ...data, tenant_id: this.tenantId },
     });
@@ -49,9 +58,23 @@ export class TenantQuery {
   }
 
   // ─── Accounts ───
-  async createAccount(userId: string, leverage = 100) {
+  async createAccount(
+    userId: string,
+    opts: { leverage?: number; currency?: string; balance?: bigint; equity?: bigint } | number = {},
+  ) {
+    // Sprint 8.3: accept an options object. A bare number is still accepted
+    // as `leverage` for backward compatibility with older call sites.
+    const o = typeof opts === 'number' ? { leverage: opts } : opts;
+    const balance = o.balance ?? BigInt(0);
     return prisma.account.create({
-      data: { tenant_id: this.tenantId, user_id: userId, leverage, balance: BigInt(0), equity: BigInt(0) },
+      data: {
+        tenant_id: this.tenantId,
+        user_id: userId,
+        leverage: o.leverage ?? 100,
+        currency: o.currency ?? 'USD',
+        balance,
+        equity: o.equity ?? balance,
+      },
     });
   }
 

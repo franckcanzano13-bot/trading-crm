@@ -91,3 +91,24 @@ writing the ledger — i.e. a regression.
 - Follow-up: when the dealer module makes scheduled-close adjustments,
   the segregation ledger already records them via the
   `closeDealerTrade` path; no extra work needed.
+
+## Addendum — Sprint 8.4 (2026-09-18): the canary fired
+
+The first end-to-end smoke run on a clean PostgreSQL (`scripts/smoke-api.mjs`)
+reported `DRIFT_DETECTED` before any user action, and the drift widened on
+every CRM conversion with an FTD. Two paths wrote `Account.balance` without
+a ledger row:
+
+- `seed.ts` funded the demo trader with `updateAccountBalance` directly.
+- `POST /api/v1/crm/leads/:id/convert` created the account with
+  `balance = deposit` and a `Transaction`, but no `CLIENT_TRUST` entry, and
+  none of it was inside a `$transaction`.
+
+Both now go through `recordDeposit` inside one atomic transaction. To make
+that possible without duplicating tenant-scoped queries, `TenantQuery`
+accepts an optional Prisma client and exposes `withTx(tx)`; every method
+routes through `this.db`. Rule going forward: **any code that sets or
+adjusts `Account.balance` must run inside `prisma.$transaction` and call a
+`shared/segregation` helper in the same block.** The smoke test asserts
+`drift_cents === 0` after deposits, a closed trade and an FTD, so the next
+regression fails CI-adjacent tooling rather than a regulator's audit.

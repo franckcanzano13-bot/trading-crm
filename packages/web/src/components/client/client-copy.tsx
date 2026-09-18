@@ -1,4 +1,5 @@
 'use client';
+import type { JSX } from 'react';
 import { useState, useMemo } from 'react';
 
 type SortBy = 'copiers' | 'profit' | 'winRate' | 'risk';

@@ -18,6 +18,7 @@ decisions get a new ADR that references the old one.
 | 008 | Versioned migrations + DB audit guards   | Accepted   |
 | 009 | Dealer module — runtime flag + build strip | Accepted |
 | 010 | Client funds segregation ledger          | Accepted   |
+| 011 | Dependency currency and the npm audit gate | Accepted   |
 
 ## Template
 

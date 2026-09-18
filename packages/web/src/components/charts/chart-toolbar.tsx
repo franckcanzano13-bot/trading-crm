@@ -1,4 +1,5 @@
 'use client';
+import type { JSX } from 'react';
 import { useState, useRef, useEffect } from 'react';
 import { useTradingStore, ChartType, IndicatorType } from '@/stores/trading-store';
 

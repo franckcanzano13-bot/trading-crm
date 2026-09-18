@@ -106,3 +106,64 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: 'http://localhost:6500'
         run: npx next build
+
+  # Sprint 9.5 — Build both container images on every push/PR so the
+  # Dockerfiles can never rot silently (the Sprint 7.2 Dockerfile was merged
+  # without ever being built). Images are built, smoke-tested and discarded;
+  # publishing to a registry is a separate, release-only workflow.
+  docker-images:
+    name: Docker (api full + regulated, web)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build api image (BUILD_PROFILE=full)
+        run: docker build -f packages/server/Dockerfile -t tradexlabel/api:ci .
+
+      - name: Build api image (BUILD_PROFILE=regulated)
+        run: docker build -f packages/server/Dockerfile --build-arg BUILD_PROFILE=regulated -t tradexlabel/api:ci-regulated .
+
+      # Sprint 7.5 promise, now enforced: the regulated image must contain
+      # no dealer code at all, and the full image must contain it.
+      - name: Assert dealer module presence per profile
+        run: |
+          set -e
+          docker run --rm tradexlabel/api:ci sh -c 'test -d packages/server/dist/modules/dealer' \
+            && echo "full image: dealer module present (expected)"
+          if docker run --rm tradexlabel/api:ci-regulated sh -c 'test -e packages/server/dist/modules/dealer'; then
+            echo "regulated image still contains dealer code" >&2; exit 1
+          fi
+          echo "regulated image: no dealer module (expected)"
+
+      - name: Boot api image against a throwaway Postgres and hit /health
+        run: |
+          set -e
+          docker network create ci-net
+          docker run -d --name ci-pg --network ci-net \
+            -e POSTGRES_USER=tradexlabel -e POSTGRES_PASSWORD=ci -e POSTGRES_DB=tradexlabel postgres:16-alpine
+          for i in $(seq 1 30); do docker exec ci-pg pg_isready -U tradexlabel && break; sleep 1; done
+          docker run --rm --network ci-net \
+            -e DATABASE_URL=postgresql://tradexlabel:ci@ci-pg:5432/tradexlabel \
+            -w /app/packages/server tradexlabel/api:ci npx prisma migrate deploy
+          docker run -d --name ci-api --network ci-net -p 5500:5500 \
+            -e DATABASE_URL=postgresql://tradexlabel:ci@ci-pg:5432/tradexlabel \
+            -e JWT_SECRET=ci-test-jwt-secret-must-be-long-enough \
+            -e JWT_REFRESH_SECRET=ci-test-refresh-secret-must-be-long-enough \
+            -e ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+            -e METRICS_AUTH_TOKEN=ci-metrics -e CORS_ALLOWED_ORIGINS=http://localhost \
+            tradexlabel/api:ci
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:5500/api/v1/health >/dev/null && break; sleep 1; done
+          curl -fsS http://127.0.0.1:5500/api/v1/health
+          docker logs ci-api | tail -20
+
+      - name: Build web image
+        run: docker build -f packages/web/Dockerfile --build-arg NEXT_PUBLIC_API_URL=http://localhost:5500 -t tradexlabel/web:ci .
+
+      - name: Boot web image and fetch /
+        run: |
+          set -e
+          docker run -d --name ci-web -p 3000:3000 tradexlabel/web:ci
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:3000/ >/dev/null && break; sleep 1; done
+          curl -fsS -o /dev/null -w "web / -> %{http_code}\n" http://127.0.0.1:3000/

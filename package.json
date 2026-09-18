@@ -16,7 +16,8 @@
     "test:server": "npm run test -w packages/server",
     "test:web": "npm run test -w packages/web",
     "seed": "npm run seed -w packages/server",
-    "lint": "eslint packages/*/src/**/*.ts"
+    "lint": "eslint packages/*/src/**/*.ts",
+    "smoke": "node scripts/smoke-api.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",

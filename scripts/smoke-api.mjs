@@ -14,6 +14,12 @@
  *   node scripts/smoke-api.mjs [http://127.0.0.1:5500]
  *
  * Exit code 1 on any failure. No dependencies beyond Node 18+ fetch.
+ *
+ * Login budget: POST /api/v1/auth/login is rate-limited to 5 requests per
+ * 15 minutes per IP (Sprint 2.1). One run spends 3 of them (trader, wrong
+ * password, converted client). Running it twice in 15 minutes against the
+ * same server trips the limiter and shows up as 429s on the auth checks —
+ * restart the API (in-memory store) or wait before a second run.
  */
 const BASE = process.argv[2] || process.env.SMOKE_API_URL || 'http://127.0.0.1:5500';
 const T = process.env.SMOKE_TENANT_ID;

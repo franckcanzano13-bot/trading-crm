@@ -4,6 +4,8 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
+import Redis from 'ioredis';
+import type { FastifyBaseLogger } from 'fastify';
 import websocket from '@fastify/websocket';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
@@ -29,6 +31,34 @@ import { candlesRoute } from './modules/pricing/candles-route';
 import { crmRoutes } from './modules/crm/routes';
 import { emailRoutes } from './modules/crm/email-routes';
 import { reportsRoutes } from './modules/reports/routes';
+
+
+/**
+ * Sprint 9.2 — Try to reach Redis for the rate-limit store. Returns a
+ * connected client or null (in-memory fallback). Bounded to ~1s so a
+ * missing Redis never delays boot noticeably.
+ */
+async function connectRedisForRateLimit(log: FastifyBaseLogger): Promise<Redis | null> {
+  if (!config.REDIS_URL) return null;
+  const client = new Redis(config.REDIS_URL, {
+    lazyConnect: true,
+    connectTimeout: 1000,
+    maxRetriesPerRequest: 1,
+    enableOfflineQueue: false,
+    retryStrategy: () => null, // never reconnect in a loop; the fallback is in-memory
+  });
+  client.on('error', () => { /* surfaced by the ping below; silences reconnect noise */ });
+  try {
+    await client.connect();
+    await client.ping();
+    log.info({ redis: config.REDIS_URL.replace(/\/\/.*@/, '//***@') }, '[rate-limit] Redis store connected (shared across replicas)');
+    return client;
+  } catch (err) {
+    log.warn({ err: err instanceof Error ? err.message : String(err) }, '[rate-limit] Redis unreachable - falling back to in-memory store (per-process)');
+    client.disconnect();
+    return null;
+  }
+}
 
 async function buildServer() {
   const fastify = Fastify({
@@ -78,10 +108,20 @@ async function buildServer() {
     secret: config.JWT_SECRET,
   });
 
+  // Sprint 9.2: rate-limit counters live in Redis when REDIS_URL is
+  // reachable, so the 5/15min login limiter (Sprint 2.1) is shared across
+  // API replicas. If Redis is unreachable at boot (typical local dev), we
+  // log a warning and fall back to the in-memory store instead of failing
+  // every request — CLAUDE.md rule 6 (fallback, never block).
+  const redisForRateLimit = await connectRedisForRateLimit(fastify.log);
   await fastify.register(rateLimit, {
     max: 2000,
     timeWindow: '1 minute',
+    ...(redisForRateLimit ? { redis: redisForRateLimit, nameSpace: 'txl-rl:' } : {}),
   });
+  if (redisForRateLimit) {
+    fastify.addHook('onClose', async () => { await redisForRateLimit.quit().catch(() => {}); });
+  }
 
   await fastify.register(websocket);
 
@@ -146,7 +186,8 @@ async function buildServer() {
     if (!start) return;
     const seconds = Number(process.hrtime.bigint() - start) / 1e9;
     // Use routerPath (not raw URL) to avoid high-cardinality from path params
-    const route = r.routeOptions?.url || request.routerPath || 'unknown';
+    // Fastify 5 (Sprint 9.1): request.routerPath was removed; routeOptions.url is the canonical source.
+    const route = r.routeOptions?.url || 'unknown';
     httpRequestsTotal.labels(request.method, route, String(reply.statusCode)).inc();
     httpRequestDuration.labels(request.method, route).observe(seconds);
   });

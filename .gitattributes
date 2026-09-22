@@ -1,0 +1,9 @@
+# Phase 0: shell scripts and compose files must stay LF even on Windows checkouts,
+# otherwise deploy.sh copied to the staging host fails with "$'': command not found".
+* text=auto
+*.sh text eol=lf
+*.mjs text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf
+*.dockerignore text eol=lf

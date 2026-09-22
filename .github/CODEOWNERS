@@ -1,0 +1,12 @@
+# Phase 0.1 — Every change to money, auth, tenancy or the dealer module
+# needs a review from the repository owner once branch protection is on.
+*                                           @franckcanzano13-bot
+/packages/server/src/modules/trading/       @franckcanzano13-bot
+/packages/server/src/modules/risk/          @franckcanzano13-bot
+/packages/server/src/modules/dealer/        @franckcanzano13-bot
+/packages/server/src/modules/auth/          @franckcanzano13-bot
+/packages/server/src/shared/segregation/    @franckcanzano13-bot
+/packages/server/src/shared/middleware/     @franckcanzano13-bot
+/packages/server/prisma/                    @franckcanzano13-bot
+/.github/                                   @franckcanzano13-bot
+/deploy/                                    @franckcanzano13-bot

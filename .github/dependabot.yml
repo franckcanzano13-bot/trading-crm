@@ -1,0 +1,51 @@
+# Phase 0.3 — Dependabot. The npm audit gate turned red in September 2026
+# on an unchanged codebase because nobody was watching advisories. This
+# keeps dependencies moving in small, reviewable PRs instead of a
+# Fastify-4-to-5 / Next-14-to-16 jump every six months.
+version: 2
+updates:
+  # Root workspace (npm workspaces: server, web, shared share one lockfile)
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "07:00"
+      timezone: Europe/Paris
+    open-pull-requests-limit: 10
+    groups:
+      fastify:
+        patterns: ["fastify", "@fastify/*"]
+      nextjs:
+        patterns: ["next", "react", "react-dom", "@types/react", "@types/react-dom", "eslint-config-next"]
+      prisma:
+        patterns: ["prisma", "@prisma/*"]
+      dev-tooling:
+        dependency-type: development
+    labels: [dependencies]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    labels: [dependencies, ci]
+    commit-message:
+      prefix: "ci(deps)"
+
+  - package-ecosystem: docker
+    directory: /packages/server
+    schedule:
+      interval: weekly
+    labels: [dependencies, docker]
+    commit-message:
+      prefix: "build(deps)"
+
+  - package-ecosystem: docker
+    directory: /packages/web
+    schedule:
+      interval: weekly
+    labels: [dependencies, docker]
+    commit-message:
+      prefix: "build(deps)"

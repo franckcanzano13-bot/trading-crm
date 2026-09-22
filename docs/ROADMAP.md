@@ -21,6 +21,12 @@ Ce qui empêche physiquement de livrer aujourd'hui.
 
 **Porte de sortie** : `main` protégée, CI complète verte sur GitHub, staging accessible en HTTPS avec les données de seed.
 
+**État au 22 septembre 2026** — tout ce qui se fait dans le dépôt est livré, le reste attend le propriétaire GitHub et un serveur :
+- 0.1 : commits prêts, `CODEOWNERS` et template de PR en place ; **push et protection de branche à faire par le propriétaire** ([runbook](runbooks/phase0-github-setup.md)).
+- 0.2 : job CI Docker écrit ; **s'exécutera au premier push**.
+- 0.3 : `.github/dependabot.yml` livré (npm groupé, Actions, Docker) ; **alertes à activer dans les réglages du dépôt**.
+- 0.4 : stack staging complète en infrastructure-as-code (`deploy/staging/` : Traefik + TLS, api ×2, worker, web, Postgres, Redis, script de déploiement avec smoke), publication des images sur GHCR et déploiement SSH automatique après CI verte ; **il manque un VPS, deux enregistrements DNS et trois secrets GitHub** ([runbook](../deploy/staging/README.md)).
+
 ---
 
 ## Phase 1 — Prêt pour la production (semaines 2 à 4) — ~18 j

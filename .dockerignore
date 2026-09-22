@@ -50,3 +50,6 @@ packages/web
 Dockerfile
 docker-compose.yml
 .dockerignore
+
+# Phase 0.4: staging stack files are not part of any image
+deploy

@@ -1,0 +1,100 @@
+# Phase 0.4 — Publish container images to GitHub Container Registry.
+#
+# Runs after CI succeeds on main (and on version tags). Produces:
+#   ghcr.io/<owner>/<repo>/api:<sha>, :main            (BUILD_PROFILE=full)
+#   ghcr.io/<owner>/<repo>/api-regulated:<sha>, :main  (BUILD_PROFILE=regulated)
+#   ghcr.io/<owner>/<repo>/web:<sha>, :main
+# Tags vX.Y.Z additionally get :vX.Y.Z and :latest.
+#
+# NEXT_PUBLIC_API_URL is baked into the web bundle: this workflow builds the
+# web image for the staging API origin (repository variable
+# STAGING_API_URL). Production gets its own build with its own origin.
+name: Release images
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BASE: ghcr.io/${{ github.repository }}
+
+jobs:
+  publish:
+    # Only after a green CI run (or a manual/tag trigger).
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: tags
+        run: |
+          SHA="${{ github.event.workflow_run.head_sha || github.sha }}"
+          SHORT="${SHA:0:12}"
+          echo "short=$SHORT" >> "$GITHUB_OUTPUT"
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "extra=${GITHUB_REF#refs/tags/},latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "extra=main" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push api (full)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/server/Dockerfile
+          push: true
+          build-args: BUILD_PROFILE=full
+          tags: |
+            ${{ env.IMAGE_BASE }}/api:${{ steps.tags.outputs.short }}
+            ${{ env.IMAGE_BASE }}/api:${{ steps.tags.outputs.extra }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+
+      - name: Build and push api (regulated)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/server/Dockerfile
+          push: true
+          build-args: BUILD_PROFILE=regulated
+          tags: |
+            ${{ env.IMAGE_BASE }}/api-regulated:${{ steps.tags.outputs.short }}
+            ${{ env.IMAGE_BASE }}/api-regulated:${{ steps.tags.outputs.extra }}
+          cache-from: type=gha,scope=api-regulated
+          cache-to: type=gha,scope=api-regulated,mode=max
+
+      - name: Build and push web (staging origin)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/web/Dockerfile
+          push: true
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ vars.STAGING_API_URL }}
+          tags: |
+            ${{ env.IMAGE_BASE }}/web:${{ steps.tags.outputs.short }}
+            ${{ env.IMAGE_BASE }}/web:${{ steps.tags.outputs.extra }}
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max

@@ -1,0 +1,64 @@
+# Phase 0.4 — Deploy the freshly published images to the staging host.
+#
+# Triggered after "Release images" succeeds on main, or by hand. Requires
+# these repository secrets (Settings → Secrets → Actions):
+#   STAGING_SSH_HOST   e.g. staging.tradexlabel.com or an IP
+#   STAGING_SSH_USER   e.g. deploy
+#   STAGING_SSH_KEY    private key whose public half is in the host's authorized_keys
+# and the repository variable STAGING_API_URL (used by the web image build).
+#
+# The host must have been prepared once with deploy/staging/README.md
+# (Docker, the compose file, a filled .env). The job then only pulls,
+# restarts, migrates and smoke-tests — see deploy/staging/deploy.sh.
+name: Deploy staging
+
+on:
+  workflow_run:
+    workflows: [Release images]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Image tag to deploy (default main)
+        required: false
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: staging
+      url: ${{ vars.STAGING_WEB_URL }}
+    steps:
+      - name: Check secrets are configured
+        id: gate
+        env:
+          HOST: ${{ secrets.STAGING_SSH_HOST }}
+        run: |
+          if [ -z "$HOST" ]; then
+            echo "STAGING_SSH_HOST not set — staging host not provisioned yet, skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deploy over SSH
+        if: steps.gate.outputs.skip != 'true'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.STAGING_SSH_HOST }}
+          username: ${{ secrets.STAGING_SSH_USER }}
+          key: ${{ secrets.STAGING_SSH_KEY }}
+          script_stop: true
+          script: |
+            cd /opt/tradexlabel
+            export IMAGE_TAG="${{ github.event.inputs.image_tag || 'main' }}"
+            bash deploy.sh

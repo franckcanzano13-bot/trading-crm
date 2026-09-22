@@ -1,0 +1,153 @@
+# Phase 0.4 — Staging stack for a single VPS (2 vCPU / 4 GB is enough).
+#
+#   Traefik (TLS via Let's Encrypt)
+#     ├── https://${STAGING_DOMAIN}          → web:3000
+#     └── https://api.${STAGING_DOMAIN}      → api:5500  (HTTP + WebSocket)
+#   api            ×2 replicas, stateless (rate-limit counters in Redis)
+#   position-monitor  ×1 (leader election guards against duplicates anyway)
+#   postgres 16 + redis 7 with persistent volumes
+#
+# Images come from GHCR (see .github/workflows/release-images.yml). Copy
+# this file, .env.example (→ .env) and deploy.sh to /opt/tradexlabel on the
+# host. Full procedure in README.md next to this file.
+#
+# Production differences (not in this file on purpose): managed Postgres
+# with PITR, managed Redis, at least two hosts or a container platform,
+# secrets from a vault rather than a .env file.
+
+name: tradexlabel-staging
+
+services:
+  traefik:
+    image: traefik:v3.1
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.tlschallenge=true
+      - --log.level=INFO
+      - --accesslog=true
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    image: ${IMAGE_BASE}/api:${IMAGE_TAG:-main}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    working_dir: /app/packages/server
+    command: ["npx", "prisma", "migrate", "deploy"]
+    restart: "no"
+
+  api:
+    image: ${IMAGE_BASE}/api:${IMAGE_TAG:-main}
+    restart: unless-stopped
+    deploy:
+      replicas: 2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "5500"
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      METRICS_AUTH_TOKEN: ${METRICS_AUTH_TOKEN}
+      CORS_ALLOWED_ORIGINS: https://${STAGING_DOMAIN}
+      RUN_AS_API_ONLY: "1"
+      ENABLE_DEALER_MODULE: ${ENABLE_DEALER_MODULE:-0}
+      EXPOSE_API_DOCS: "1"
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+      TWELVEDATA_API_KEY: ${TWELVEDATA_API_KEY:-}
+      KYC_API_URL: ${KYC_API_URL:-}
+      KYC_API_KEY: ${KYC_API_KEY:-}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.api.rule=Host(`api.${STAGING_DOMAIN}`)
+      - traefik.http.routers.api.entrypoints=websecure
+      - traefik.http.routers.api.tls.certresolver=le
+      - traefik.http.services.api.loadbalancer.server.port=5500
+      - traefik.http.services.api.loadbalancer.sticky.cookie=false
+
+  position-monitor:
+    image: ${IMAGE_BASE}/api:${IMAGE_TAG:-main}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+      TWELVEDATA_API_KEY: ${TWELVEDATA_API_KEY:-}
+    command: ["node", "packages/server/dist/workers/position-monitor-worker.js"]
+
+  web:
+    image: ${IMAGE_BASE}/web:${IMAGE_TAG:-main}
+    restart: unless-stopped
+    depends_on:
+      - api
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.web.rule=Host(`${STAGING_DOMAIN}`)
+      - traefik.http.routers.web.entrypoints=websecure
+      - traefik.http.routers.web.tls.certresolver=le
+      - traefik.http.services.web.loadbalancer.server.port=3000
+
+volumes:
+  pgdata:
+  redisdata:
+  letsencrypt:

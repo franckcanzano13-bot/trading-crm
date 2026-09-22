@@ -1,0 +1,80 @@
+# Staging — runbook (Phase 0.4)
+
+One VPS, Docker Compose, Traefik with Let's Encrypt, images from GHCR.
+Everything below is done once; afterwards every green CI run on `main`
+redeploys automatically (`.github/workflows/deploy-staging.yml`).
+
+## 1. Host
+
+- Ubuntu 24.04, 2 vCPU, 4 GB RAM, 40 GB disk. Any provider.
+- Open inbound 22, 80, 443 only.
+- Install Docker Engine + Compose plugin (`https://docs.docker.com/engine/install/ubuntu/`).
+- Create a `deploy` user in the `docker` group; put the CI public key in `~deploy/.ssh/authorized_keys`.
+
+## 2. DNS
+
+Two A records pointing at the host:
+
+```
+staging.tradexlabel.com       A  <host ip>
+api.staging.tradexlabel.com   A  <host ip>
+```
+
+Traefik obtains certificates on first request; DNS must resolve before the first `deploy.sh`.
+
+## 3. Files on the host
+
+```bash
+sudo mkdir -p /opt/tradexlabel && sudo chown deploy:deploy /opt/tradexlabel
+# from the repo, on your machine:
+scp deploy/staging/docker-compose.yml deploy/staging/deploy.sh deploy/staging/.env.example \
+    scripts/smoke-api.mjs deploy@<host>:/opt/tradexlabel/
+ssh deploy@<host> 'cd /opt/tradexlabel && cp .env.example .env && chmod 600 .env && chmod +x deploy.sh'
+```
+
+Edit `/opt/tradexlabel/.env`: domain, ACME email, and one `openssl rand -hex 32` per secret. `ENCRYPTION_KEY` must be 64 hex characters.
+
+GHCR packages are private by default: `docker login ghcr.io` on the host once with a token that has `read:packages`.
+
+## 4. GitHub configuration
+
+Repository → Settings:
+
+- **Secrets → Actions**: `STAGING_SSH_HOST`, `STAGING_SSH_USER` (`deploy`), `STAGING_SSH_KEY` (private key).
+- **Variables → Actions**: `STAGING_API_URL` = `https://api.staging.tradexlabel.com`, `STAGING_WEB_URL` = `https://staging.tradexlabel.com`.
+- **Environments**: create `staging` (optionally with a required reviewer).
+- **Branches → main → protection**: require a pull request, require status checks `Server (typecheck + tests on PostgreSQL)`, `Web (typecheck + build)`, `Docker (api full + regulated, web)`; require branches up to date; include administrators.
+- **Code security**: enable Dependabot alerts and security updates (`.github/dependabot.yml` is already in the repo).
+
+## 5. First deploy
+
+```bash
+ssh deploy@<host>
+cd /opt/tradexlabel
+IMAGE_TAG=main bash deploy.sh
+```
+
+Then seed the demo data from a dev machine (the runtime image has no dev tooling):
+
+```bash
+# on your machine, tunnel to the host's Postgres
+ssh -L 5432:localhost:5432 deploy@<host> -N &
+cd packages/server
+DATABASE_URL=postgresql://tradexlabel:<POSTGRES_PASSWORD>@localhost:5432/tradexlabel npx tsx src/seed.ts
+```
+
+Copy the two tenant ids the seed prints into `/opt/tradexlabel/.env` (`SMOKE_TENANT_ID`, `SMOKE_OTHER_TENANT_ID`) and run `bash deploy.sh` again: the smoke test runs at the end of every deploy from now on.
+
+## 6. Day-two operations
+
+| Task | Command |
+|------|---------|
+| Redeploy current main | `bash deploy.sh` |
+| Roll back | `IMAGE_TAG=<12-char sha from GHCR> bash deploy.sh` |
+| Logs | `docker compose logs -f api position-monitor web` |
+| Database backup | `docker compose exec -T postgres pg_dump -U tradexlabel tradexlabel \| gzip > backup-$(date +%F).sql.gz` |
+| Restore | `gunzip -c backup.sql.gz \| docker compose exec -T postgres psql -U tradexlabel tradexlabel` |
+| Metrics | `curl -H "Authorization: Bearer $METRICS_AUTH_TOKEN" https://api.<domain>/metrics` |
+| API docs | `https://api.<domain>/api/docs` (EXPOSE_API_DOCS=1 on staging only) |
+
+Backups are manual on staging. Production uses a managed Postgres with point-in-time recovery (roadmap Phase 1.6).

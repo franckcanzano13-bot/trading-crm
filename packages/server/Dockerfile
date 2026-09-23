@@ -46,6 +46,11 @@ RUN npm ci \
     --workspace=@tradexlabel/server \
     --workspace=@tradexlabel/shared \
     --include-workspace-root
+# npm hoists everything it can to the root node_modules; a workspace only
+# gets its own node_modules when a dependency version conflicts. Make sure
+# both directories exist so the COPY --from=deps lines below never fail
+# (first CI run: "/workspace/packages/shared/node_modules": not found).
+RUN mkdir -p packages/shared/node_modules packages/server/node_modules
 
 
 # ─── 2. builder ──────────────────────────────────────────────────────────

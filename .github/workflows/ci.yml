@@ -49,6 +49,13 @@ jobs:
         working-directory: .
         run: npm ci
 
+      # @tradexlabel/shared resolves to packages/shared/dist (main/types), which
+      # is git-ignored: it must be built before anything imports it. First CI
+      # run on GitHub failed on 19 "Cannot find module '@tradexlabel/shared'".
+      - name: Build shared package
+        working-directory: .
+        run: npm run build --workspace=@tradexlabel/shared
+
       - name: Generate Prisma client
         run: npx prisma generate
 
@@ -94,6 +101,10 @@ jobs:
       - name: Install root deps (workspace)
         working-directory: .
         run: npm ci
+
+      - name: Build shared package
+        working-directory: .
+        run: npm run build --workspace=@tradexlabel/shared
 
       - name: Generate Prisma client (needed by shared types)
         working-directory: packages/server

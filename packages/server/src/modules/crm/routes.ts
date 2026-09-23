@@ -9,6 +9,7 @@ import crypto from 'crypto';
 import bcrypt from 'bcrypt';
 import { BCRYPT_SALT_ROUNDS } from '@tradexlabel/shared';
 import { recordDeposit } from '../../shared/segregation';
+import { checkUserQuota, auditQuotaHit, quotaMessages } from '../../shared/quotas';
 
 const logger = pino({ name: 'crm' });
 
@@ -344,6 +345,13 @@ export async function crmRoutes(fastify: FastifyInstance) {
     const lead = await prisma.lead.findFirst({ where: { id, tenant_id: tenantId } });
     if (!lead) return reply.status(404).send({ error: 'Lead not found', code: 'NOT_FOUND' });
     if (lead.status === 'CONVERTED') return reply.status(400).send({ error: 'Already converted', code: 'ALREADY_CONVERTED' });
+
+    // Phase 1.3: plan quota (max_users)
+    const quota = await checkUserQuota(tenantId);
+    if (!quota.ok) {
+      await auditQuotaHit({ tenantId, kind: 'users', check: quota, actorId: adminIdOf(request), actorType: 'admin', ip: request.ip });
+      return reply.status(403).send({ error: quotaMessages.users(quota), code: 'PLAN_LIMIT_USERS' });
+    }
 
     // Sprint 8.3: this used to `require('bcryptjs')`, a package that is not a
     // dependency of the server. Every conversion attempt failed with

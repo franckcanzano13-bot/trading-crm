@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { tenantResolver } from '../../shared/middleware/tenant-resolver';
 import { requireAdmin } from '../../shared/middleware/auth';
+import { checkInstrumentQuota, getTenantPlanUsage, auditQuotaHit, quotaMessages } from '../../shared/quotas';
 import { serializeBigInt } from '../../shared/utils/index';
 import { prisma } from '../../shared/database/prisma';
 import { audit } from '../../shared/audit';
@@ -55,7 +56,7 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
     preHandler: [tenantResolver, requireAdmin],
   }, async (request, reply) => {
     const stats = await request.tenantQuery!.getDashboardStats();
-    return reply.send({ data: serializeBigInt(stats) });
+    return reply.send({ data: { ...serializeBigInt(stats) as object, plan_usage: await getTenantPlanUsage(request.tenantId!) } });
   });
 
   // List instruments (admin)
@@ -76,6 +77,14 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
       min_volume?: number;
       max_volume?: number;
     };
+    // Phase 1.3: plan quota (max_instruments) applies to activations only.
+    if (body.is_active === true) {
+      const quota = await checkInstrumentQuota(request.tenantId!, request.params.id);
+      if (!quota.ok) {
+        await auditQuotaHit({ tenantId: request.tenantId!, kind: 'instruments', check: quota, actorId: request.userData!.sub, actorType: 'admin', ip: request.ip });
+        return reply.status(403).send({ error: quotaMessages.instruments(quota), code: 'PLAN_LIMIT_INSTRUMENTS' });
+      }
+    }
     const instrument = await request.tenantQuery!.updateInstrument(request.params.id, {
       spread_markup: body.spread_markup,
       is_active: body.is_active,

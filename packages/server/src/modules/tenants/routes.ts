@@ -1,11 +1,10 @@
 import { FastifyInstance } from 'fastify';
 import bcrypt from 'bcrypt';
 import { z } from 'zod';
-import { prisma, createTenantSchema } from '../../shared/database/prisma';
+import { prisma } from '../../shared/database/prisma';
 import { requireSuperAdmin } from '../../shared/middleware/auth';
 import { resolveTenantByHost } from '../../shared/middleware/tenant-resolver';
 import { BCRYPT_SALT_ROUNDS, ALL_INSTRUMENTS } from '@tradexlabel/shared';
-import { TenantQuery } from '../../shared/database/tenant-queries';
 import { logger, isValidLei } from '../../shared/utils/index';
 
 const CreateTenantSchema = z.object({
@@ -17,6 +16,9 @@ const CreateTenantSchema = z.object({
   admin_password: z.string().min(8),
   admin_name: z.string().min(1),
   config: z.any().optional(),
+  // Phase 2.1: optional plan assignment at creation (self-serve onboarding)
+  plan_id: z.string().uuid().optional(),
+  trial: z.boolean().optional().default(false),
 });
 
 export async function tenantRoutes(fastify: FastifyInstance) {
@@ -57,66 +59,71 @@ export async function tenantRoutes(fastify: FastifyInstance) {
       return reply.status(400).send({ error: 'Validation failed', code: 'VALIDATION_ERROR', details: parsed.error.flatten() });
     }
 
-    const { slug, name, domain, execution_mode, admin_email, admin_password, admin_name, config } = parsed.data;
+    const { slug, name, domain, execution_mode, admin_email, admin_password, admin_name, config, plan_id, trial } = parsed.data;
 
     // Check unique
     const existing = await prisma.tenant.findFirst({ where: { OR: [{ slug }, { domain }] } });
     if (existing) {
       return reply.status(409).send({ error: 'Tenant slug or domain already exists', code: 'TENANT_EXISTS' });
     }
-
-    // Create tenant
-    const tenant = await prisma.tenant.create({
-      data: {
-        name,
-        domain,
-        slug,
-        execution_mode,
-        config: JSON.stringify(config || {
-          branding: { logo_url: '', primary_color: '#2563eb', company_name: name },
-          trading: {
-            default_leverage: 100,
-            max_leverage: 500,
-            margin_call_level: 100,
-            stop_out_level: 50,
-            max_positions: 100,
-            max_volume_per_trade: 50,
-          },
-        }),
-      },
-    });
-
-    // Create tenant admin
-    const passwordHash = await bcrypt.hash(admin_password, BCRYPT_SALT_ROUNDS);
-    await prisma.tenantAdmin.create({
-      data: {
-        tenant_id: tenant.id,
-        email: admin_email,
-        password_hash: passwordHash,
-        name: admin_name,
-      },
-    });
-
-    // Create schema and tables
-    await createTenantSchema(slug);
-
-    // Seed instruments
-    const tq = new TenantQuery(tenant.id);
-    for (const inst of ALL_INSTRUMENTS) {
-      await tq.upsertInstrument({
-        symbol: inst.symbol,
-        display_name: inst.display,
-        type: inst.type,
-        pip_size: inst.pip_size,
-        lot_size: inst.lot_size,
-        base_spread: inst.base_spread,
-      });
+    const plan = plan_id ? await prisma.plan.findUnique({ where: { id: plan_id } }) : null;
+    if (plan_id && !plan) {
+      return reply.status(404).send({ error: 'Plan not found', code: 'PLAN_NOT_FOUND' });
     }
 
-    logger.info({ tenantId: tenant.id, slug }, 'Tenant created');
-    await auditLog(request, 'CREATE_TENANT', `tenant:${tenant.id}`, { name, slug, execution_mode });
+    const passwordHash = await bcrypt.hash(admin_password, BCRYPT_SALT_ROUNDS);
+    const tenantConfig = JSON.stringify(config || {
+      branding: { logo_url: '', primary_color: '#2563eb', company_name: name },
+      trading: {
+        default_leverage: 100,
+        max_leverage: 500,
+        margin_call_level: 100,
+        stop_out_level: 50,
+        max_positions: 100,
+        max_volume_per_trade: 50,
+      },
+    });
 
-    return reply.status(201).send({ data: tenant });
+    // Phase 2.1: one transaction — a broker either fully exists (tenant,
+    // first admin, branding row, instrument catalogue, plan) or not at all.
+    // Before, a failure half-way left a tenant without admin or instruments.
+    const result = await prisma.$transaction(async (tx) => {
+      const tenant = await tx.tenant.create({ data: { name, domain, slug, execution_mode, config: tenantConfig } });
+      const admin = await tx.tenantAdmin.create({
+        data: { tenant_id: tenant.id, email: admin_email, password_hash: passwordHash, name: admin_name },
+      });
+      await tx.brokerConfig.create({ data: { tenant_id: tenant.id, company_name: name, primary_color: '#2563eb' } });
+      const instruments = await tx.instrument.createMany({
+        data: ALL_INSTRUMENTS.map((inst) => ({
+          tenant_id: tenant.id, symbol: inst.symbol, display_name: inst.display, type: inst.type,
+          pip_size: inst.pip_size, lot_size: inst.lot_size, base_spread: inst.base_spread,
+        })),
+      });
+      let subscription: { status: string; plan_name: string; trial_ends_at: Date | null } | null = null;
+      if (plan) {
+        const sub = await tx.subscription.create({
+          data: {
+            tenant_id: tenant.id, plan_id: plan.id,
+            status: trial ? 'TRIAL' : 'ACTIVE',
+            trial_ends_at: trial ? new Date(Date.now() + 14 * 86400000) : null,
+          },
+        });
+        subscription = { status: sub.status, plan_name: plan.name, trial_ends_at: sub.trial_ends_at };
+      }
+      return { tenant, admin, instruments: instruments.count, subscription };
+    });
+
+    logger.info({ tenantId: result.tenant.id, slug, plan: plan?.name ?? null }, 'Tenant created');
+    await auditLog(request, 'CREATE_TENANT', `tenant:${result.tenant.id}`, { name, slug, execution_mode, plan_id: plan?.id ?? null, trial });
+
+    return reply.status(201).send({
+      data: {
+        ...result.tenant,
+        admin: { id: result.admin.id, email: result.admin.email, name: result.admin.name },
+        instruments: result.instruments,
+        subscription: result.subscription,
+      },
+    });
   });
 
   // Update tenant (superadmin)

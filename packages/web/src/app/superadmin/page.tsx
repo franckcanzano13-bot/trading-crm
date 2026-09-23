@@ -24,8 +24,7 @@ export default function SuperAdminPage() {
 
   const [newTenant, setNewTenant] = useState({
     name: '', domain: '', slug: '', execution_mode: 'B_BOOK',
-    admin_email: '', admin_password: '', admin_name: '',
-  });
+    admin_email: '', admin_password: '', admin_name: '', plan_id: '', trial: true });
 
   const [settings, setSettings] = useState({
     platform_name: 'TradeXLabel',
@@ -88,13 +87,13 @@ export default function SuperAdminPage() {
     e.preventDefault();
     setError('');
     try {
-      await superAdminApi.createTenant(token, newTenant);
+      await superAdminApi.createTenant(token, { ...newTenant, plan_id: newTenant.plan_id || undefined });
       const data = await superAdminApi.getTenants(token);
       setTenants(data);
       setSuccess('Broker created successfully!');
       setTimeout(() => setSuccess(''), 3000);
       setTab('tenants');
-      setNewTenant({ name: '', domain: '', slug: '', execution_mode: 'B_BOOK', admin_email: '', admin_password: '', admin_name: '' });
+      setNewTenant({ name: '', domain: '', slug: '', execution_mode: 'B_BOOK', admin_email: '', admin_password: '', admin_name: '', plan_id: '', trial: true });
     } catch (err: any) {
       setError(err.message);
     }
@@ -548,6 +547,20 @@ export default function SuperAdminPage() {
                       <option value="B_BOOK">B-Book (Market Maker)</option>
                       <option value="B_BOOK_DEALER">B-Book + Dealer Desk</option>
                     </select>
+                  </div>
+                  <div>
+                    <label className="text-xs text-muted-foreground font-medium block mb-1.5">Plan (optional)</label>
+                    <select value={newTenant.plan_id} onChange={(e) => setNewTenant({ ...newTenant, plan_id: e.target.value })}
+                      className="w-full bg-background border border-border rounded-lg text-sm px-3.5 py-2.5 text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30">
+                      <option value="">No plan (unlimited, sandbox)</option>
+                      {plans.map((p: any) => <option key={p.id} value={p.id}>{p.name} — ${(p.price_cents / 100).toFixed(0)}/mo · {p.max_users} users · {p.max_instruments} instruments</option>)}
+                    </select>
+                    {newTenant.plan_id && (
+                      <label className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
+                        <input type="checkbox" checked={newTenant.trial} onChange={(e) => setNewTenant({ ...newTenant, trial: e.target.checked })} className="accent-primary" />
+                        Start with a 14-day trial
+                      </label>
+                    )}
                   </div>
                 </div>
 

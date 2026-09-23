@@ -212,6 +212,7 @@ export async function tenantRoutes(fastify: FastifyInstance) {
         prisma.trade.count({ where: { tenant_id: tenant.id, status: 'CLOSED' } }),
       ]);
 
+      // tenant-scope: superadmin endpoint, lists across tenants on purpose
       const subscription = await prisma.subscription.findFirst({
         where: { tenant_id: tenant.id, status: 'ACTIVE' },
         include: { plan: { select: { name: true, price_cents: true } } },
@@ -279,6 +280,7 @@ export async function tenantRoutes(fastify: FastifyInstance) {
   fastify.get('/api/v1/super/subscriptions', {
     preHandler: [requireSuperAdmin],
   }, async (request, reply) => {
+    // tenant-scope: superadmin endpoint, lists across tenants on purpose
     const subs = await prisma.subscription.findMany({
       include: { plan: true, invoices: { orderBy: { created_at: 'desc' }, take: 3 } },
       orderBy: { created_at: 'desc' },
@@ -298,6 +300,7 @@ export async function tenantRoutes(fastify: FastifyInstance) {
     if (!plan) return reply.status(404).send({ error: 'Plan not found', code: 'PLAN_NOT_FOUND' });
 
     // Cancel existing active subscription
+    // tenant-scope: superadmin endpoint, lists across tenants on purpose
     await prisma.subscription.updateMany({
       where: { tenant_id: body.tenant_id, status: 'ACTIVE' },
       data: { status: 'CANCELLED', ends_at: new Date() },
@@ -334,6 +337,7 @@ export async function tenantRoutes(fastify: FastifyInstance) {
   fastify.get('/api/v1/super/invoices', {
     preHandler: [requireSuperAdmin],
   }, async (request, reply) => {
+    // tenant-scope: superadmin endpoint, lists across tenants on purpose
     const invoices = await prisma.invoice.findMany({
       orderBy: { created_at: 'desc' },
       take: 100,
@@ -356,6 +360,7 @@ export async function tenantRoutes(fastify: FastifyInstance) {
   fastify.get('/api/v1/super/audit-logs', {
     preHandler: [requireSuperAdmin],
   }, async (request, reply) => {
+    // tenant-scope: superadmin endpoint, lists across tenants on purpose
     const logs = await prisma.auditLog.findMany({
       orderBy: { created_at: 'desc' },
       take: 200,

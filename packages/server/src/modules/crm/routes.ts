@@ -252,7 +252,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
     ])].filter(Boolean);
     const agentMap: Record<string, string> = {};
     if (agentIds.length > 0) {
-      const agents = await prisma.tenantAdmin.findMany({ where: { id: { in: agentIds } }, select: { id: true, name: true } });
+      const agents = await prisma.tenantAdmin.findMany({ where: { id: { in: agentIds }, tenant_id: tenantId }, select: { id: true, name: true } });
       agents.forEach(a => { agentMap[a.id] = a.name; });
     }
 
@@ -272,7 +272,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
     const body = CreateLeadSchema.parse(request.body);
 
     // Get next lead number (global auto-increment)
-    const maxLead = await prisma.lead.findFirst({ orderBy: { lead_number: 'desc' }, select: { lead_number: true } });
+    const maxLead = await prisma.lead.findFirst({ where: { tenant_id: tenantId }, orderBy: { lead_number: 'desc' }, select: { lead_number: true } });
     const nextNumber = (maxLead?.lead_number || 999) + 1;
 
     const lead = await prisma.lead.create({
@@ -794,7 +794,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
     // Resolve agent names
     const agentIds = agents.map(a => a.assigned_to).filter(Boolean) as string[];
     const adminAccounts = agentIds.length > 0 ? await prisma.tenantAdmin.findMany({
-      where: { id: { in: agentIds } },
+      where: { id: { in: agentIds }, tenant_id: tenantId },
       select: { id: true, name: true, email: true },
     }) : [];
     const agentMap = new Map(adminAccounts.map(a => [a.id, a]));
@@ -847,6 +847,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
     // Sprint 2.4: lookup by SHA-256 hash (not plaintext). Falls back to legacy
     // plaintext column for keys created before the migration.
     const apiKeyHash = sha256(apiKey);
+    // tenant-scope: public affiliate endpoint — the tenant is derived from the affiliate found by its globally unique key hash
     let affiliate = await prisma.affiliate.findFirst({ where: { api_key_hash: apiKeyHash } });
     if (!affiliate) {
       // Backward-compat: legacy keys still stored as plaintext
@@ -916,6 +917,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
 
     // Sprint 2.4: lookup by hash with legacy fallback
     const apiKeyHash = sha256(apiKey);
+    // tenant-scope: public affiliate endpoint — the tenant is derived from the affiliate found by its globally unique key hash
     let affiliate = await prisma.affiliate.findFirst({ where: { api_key_hash: apiKeyHash } });
     if (!affiliate) {
       affiliate = await prisma.affiliate.findUnique({ where: { api_key: apiKey } });
@@ -923,7 +925,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
     if (!affiliate) return reply.status(401).send({ error: 'Invalid API key', code: 'UNAUTHORIZED' });
 
     const commissions = await prisma.commission.findMany({
-      where: { affiliate_id: affiliate.id },
+      where: { affiliate_id: affiliate.id, tenant_id: affiliate.tenant_id },
       orderBy: { created_at: 'desc' },
       take: 100,
     });
@@ -1101,7 +1103,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
         const existing = await prisma.lead.findFirst({ where: { email, tenant_id: tenantId } });
         if (existing) { skipped++; continue; }
 
-        const maxLead = await prisma.lead.findFirst({ orderBy: { lead_number: 'desc' }, select: { lead_number: true } });
+        const maxLead = await prisma.lead.findFirst({ where: { tenant_id: tenantId }, orderBy: { lead_number: 'desc' }, select: { lead_number: true } });
         const nextNumber = (maxLead?.lead_number || 999) + 1;
 
         await prisma.lead.create({
@@ -1237,7 +1239,7 @@ export async function crmRoutes(fastify: FastifyInstance) {
     }
     const instrumentIds = Object.keys(instrumentMap);
     const instruments = instrumentIds.length > 0
-      ? await prisma.instrument.findMany({ where: { id: { in: instrumentIds } }, select: { id: true, symbol: true } })
+      ? await prisma.instrument.findMany({ where: { id: { in: instrumentIds }, tenant_id: tenantId }, select: { id: true, symbol: true } })
       : [];
     const symbolMap: Record<string, string> = {};
     instruments.forEach(i => { symbolMap[i.id] = i.symbol; });

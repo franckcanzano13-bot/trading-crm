@@ -40,7 +40,7 @@ describe('Phase 1.1 — password reset', () => {
   });
 
   afterAll(async () => {
-    await prisma.passwordResetToken.deleteMany({ where: { tenant_id: tenantId } }).catch(() => {});
+    await prisma.authToken.deleteMany({ where: { tenant_id: tenantId } }).catch(() => {});
     await prisma.auditLog.deleteMany({ where: { tenant_id: tenantId } }).catch(() => {});
     await prisma.emailLog.deleteMany({ where: { tenant_id: tenantId } }).catch(() => {});
     await prisma.tenantAdmin.deleteMany({ where: { tenant_id: tenantId } }).catch(() => {});
@@ -52,13 +52,13 @@ describe('Phase 1.1 — password reset', () => {
   it('forgot: unknown email → 200 and no token row (no enumeration)', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/v1/auth/password/forgot', headers: { 'x-tenant-id': tenantId }, payload: { email: `nobody-${stamp}@reset.test` } });
     expect(res.statusCode).toBe(200);
-    expect(await prisma.passwordResetToken.count({ where: { tenant_id: tenantId } })).toBe(0);
+    expect(await prisma.authToken.count({ where: { tenant_id: tenantId } })).toBe(0);
   });
 
   it('forgot: known trader → 200, one token row, audit PASSWORD_RESET_REQUESTED', async () => {
     const res = await app.inject({ method: 'POST', url: '/api/v1/auth/password/forgot', headers: { 'x-tenant-id': tenantId }, payload: { email: userEmail } });
     expect(res.statusCode).toBe(200);
-    const rows = await prisma.passwordResetToken.findMany({ where: { tenant_id: tenantId, subject_type: 'USER', subject_id: userId } });
+    const rows = await prisma.authToken.findMany({ where: { tenant_id: tenantId, subject_type: 'USER', subject_id: userId } });
     expect(rows).toHaveLength(1);
     expect(rows[0].used_at).toBeNull();
     expect(rows[0].token_hash).toHaveLength(64);
@@ -68,7 +68,7 @@ describe('Phase 1.1 — password reset', () => {
 
   it('forgot again: previous token invalidated, only one live token', async () => {
     await app.inject({ method: 'POST', url: '/api/v1/auth/password/forgot', headers: { 'x-tenant-id': tenantId }, payload: { email: userEmail } });
-    const live = await prisma.passwordResetToken.count({ where: { subject_id: userId, used_at: null } });
+    const live = await prisma.authToken.count({ where: { subject_id: userId, used_at: null } });
     expect(live).toBe(1);
   });
 
@@ -90,7 +90,7 @@ describe('Phase 1.1 — password reset', () => {
 
   it('reset: expired token → 400 TOKEN_EXPIRED and password unchanged', async () => {
     const { raw } = await issue({ tenantId, subjectType: 'USER', subjectId: userId });
-    await prisma.passwordResetToken.updateMany({ where: { subject_id: userId, used_at: null }, data: { expires_at: new Date(Date.now() - 1000) } });
+    await prisma.authToken.updateMany({ where: { subject_id: userId, used_at: null }, data: { expires_at: new Date(Date.now() - 1000) } });
     const res = await app.inject({ method: 'POST', url: '/api/v1/auth/password/reset', payload: { token: raw, password: 'expired-pass-1' } });
     expect(res.statusCode).toBe(400);
     expect(res.json().code).toBe('TOKEN_EXPIRED');
@@ -114,7 +114,7 @@ describe('Phase 1.1 — password reset', () => {
   it('staff: forgot with tenant_id + reset changes the admin password', async () => {
     const forgot = await app.inject({ method: 'POST', url: '/api/v1/admin/password/forgot', payload: { email: adminEmail, tenant_id: tenantId } });
     expect(forgot.statusCode).toBe(200);
-    expect(await prisma.passwordResetToken.count({ where: { subject_type: 'ADMIN', subject_id: adminId, used_at: null } })).toBe(1);
+    expect(await prisma.authToken.count({ where: { subject_type: 'ADMIN', subject_id: adminId, used_at: null } })).toBe(1);
 
     const { raw } = await issue({ tenantId, subjectType: 'ADMIN', subjectId: adminId });
     const res = await app.inject({ method: 'POST', url: '/api/v1/admin/password/reset', payload: { token: raw, password: 'admin-new-pass-1' } });

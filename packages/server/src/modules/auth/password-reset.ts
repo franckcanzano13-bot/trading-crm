@@ -52,13 +52,14 @@ export async function issuePasswordResetToken(params: {
   const raw = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MS);
   await prisma.$transaction([
-    prisma.passwordResetToken.updateMany({
-      where: { tenant_id: params.tenantId, subject_type: params.subjectType, subject_id: params.subjectId, used_at: null },
+    prisma.authToken.updateMany({
+      where: { tenant_id: params.tenantId, purpose: 'PASSWORD_RESET', subject_type: params.subjectType, subject_id: params.subjectId, used_at: null },
       data: { used_at: new Date() },
     }),
-    prisma.passwordResetToken.create({
+    prisma.authToken.create({
       data: {
         tenant_id: params.tenantId,
+        purpose: 'PASSWORD_RESET',
         subject_type: params.subjectType,
         subject_id: params.subjectId,
         token_hash: hashToken(raw),
@@ -108,8 +109,8 @@ async function sendResetEmail(params: {
 
 /** Look the token up, validate it, and return the row (or a rejection reason). */
 async function consumeToken(raw: string, subjectType: ResetSubjectType) {
-  const row = await prisma.passwordResetToken.findUnique({ where: { token_hash: hashToken(raw) } });
-  if (!row || row.subject_type !== subjectType) return { error: 'INVALID_TOKEN' as const };
+  const row = await prisma.authToken.findUnique({ where: { token_hash: hashToken(raw) } });
+  if (!row || row.purpose !== 'PASSWORD_RESET' || row.subject_type !== subjectType) return { error: 'INVALID_TOKEN' as const };
   if (row.used_at) return { error: 'TOKEN_USED' as const, row };
   if (row.expires_at.getTime() < Date.now()) return { error: 'TOKEN_EXPIRED' as const, row };
   return { row };
@@ -175,7 +176,7 @@ export async function passwordResetRoutes(fastify: FastifyInstance) {
     // Mark used + update the password atomically; a concurrent second submit
     // of the same token loses on updateMany count and gets TOKEN_USED.
     const ok = await prisma.$transaction(async (tx) => {
-      const marked = await tx.passwordResetToken.updateMany({ where: { id: row.id, used_at: null }, data: { used_at: new Date() } });
+      const marked = await tx.authToken.updateMany({ where: { id: row.id, used_at: null }, data: { used_at: new Date() } });
       if (marked.count === 0) return false;
       if (subjectType === 'ADMIN') {
         await tx.tenantAdmin.update({ where: { id: row.subject_id }, data: { password_hash: passwordHash } });

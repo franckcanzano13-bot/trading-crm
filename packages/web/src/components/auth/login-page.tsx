@@ -9,6 +9,7 @@ export function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [acceptTerms, setAcceptTerms] = useState(false); // Phase 1.13
   const { tenantId, setTenantId, tenant: resolvedTenant } = useResolvedTenant(); // Phase 1.4
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -30,7 +31,8 @@ export function LoginPage() {
         const data = await authApi.login(tenantId, { email, password });
         login({ token: data.token, refreshToken: data.refreshToken, user: data.user, tenantId, execution_mode: data.execution_mode });
       } else {
-        const data = await authApi.register(tenantId, { email, password, name });
+        if (!acceptTerms) { setError('Please accept the terms of service and privacy policy'); setLoading(false); return; }
+        const data = await authApi.register(tenantId, { email, password, name, accept_terms: true });
         const enter = () => login({ token: data.token, refreshToken: data.refreshToken, user: data.user, tenantId, execution_mode: data.execution_mode });
         if (data.email_verification_required) setPendingLogin(() => enter); else enter();
       }
@@ -175,6 +177,15 @@ export function LoginPage() {
               />
             </div>
 
+            {mode === 'register' && (
+              <label className="flex items-start gap-2.5 text-xs text-muted-foreground cursor-pointer">
+                <input type="checkbox" checked={acceptTerms} onChange={(e) => setAcceptTerms(e.target.checked)} className="mt-0.5 accent-primary" />
+                <span>
+                  I have read and accept the <a href="/legal/terms" target="_blank" className="text-primary hover:underline">terms of service</a> and the{' '}
+                  <a href="/legal/privacy" target="_blank" className="text-primary hover:underline">privacy policy</a>.
+                </span>
+              </label>
+            )}
             {pendingLogin && (
               <div className="text-xs text-foreground bg-primary/10 border border-primary/20 rounded-lg px-3.5 py-3 space-y-2">
                 <div>Account created. We sent a confirmation link to <span className="font-medium">{email}</span>. You can explore the platform now; trading unlocks once your email is confirmed.</div>

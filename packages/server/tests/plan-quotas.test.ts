@@ -58,7 +58,7 @@ describe('Phase 1.3 — plan quota enforcement', () => {
   const register = (tid: string, n: number) => app.inject({
     method: 'POST', url: '/api/v1/auth/register', headers: { 'x-tenant-id': tid },
     remoteAddress: `10.9.${Math.floor(++ipSeq / 250)}.${ipSeq % 250 + 1}`,
-    payload: { email: `u${n}-${stamp}@q.test`, password: 'Password123', name: `U${n}` },
+    payload: { email: `u${n}-${stamp}@q.test`, password: 'Password123', accept_terms: true, name: `U${n}` },
   });
 
   it('max_users: first registration passes, second is refused 403 PLAN_LIMIT_USERS and audited', async () => {

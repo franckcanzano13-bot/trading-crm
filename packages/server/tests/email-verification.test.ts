@@ -59,7 +59,7 @@ describe('Phase 1.2 — email verification', () => {
   });
 
   it('register: creates an unverified user, a live EMAIL_VERIFY token, and flags the response', async () => {
-    const res = await app.inject({ method: 'POST', url: '/api/v1/auth/register', headers: { 'x-tenant-id': tenantId }, payload: { email, password: 'Password123', name: 'New Trader' } });
+    const res = await app.inject({ method: 'POST', url: '/api/v1/auth/register', headers: { 'x-tenant-id': tenantId }, payload: { email, password: 'Password123', accept_terms: true, name: 'New Trader' } });
     expect(res.statusCode).toBe(201);
     const body = res.json().data;
     expect(body.email_verification_required).toBe(true);
@@ -118,7 +118,7 @@ describe('Phase 1.2 — email verification', () => {
   });
 
   it('opt-out tenant: unverified user passes the gate', async () => {
-    const reg = await app.inject({ method: 'POST', url: '/api/v1/auth/register', headers: { 'x-tenant-id': optOutTenantId }, payload: { email: `opt-${stamp}@verify.test`, password: 'Password123', name: 'Opt Out' } });
+    const reg = await app.inject({ method: 'POST', url: '/api/v1/auth/register', headers: { 'x-tenant-id': optOutTenantId }, payload: { email: `opt-${stamp}@verify.test`, password: 'Password123', accept_terms: true, name: 'Opt Out' } });
     expect(reg.statusCode).toBe(201);
     expect(reg.json().data.email_verification_required).toBe(false);
     const probe = await app.inject({ method: 'POST', url: '/probe/trade', headers: { 'x-tenant-id': optOutTenantId, authorization: `Bearer ${reg.json().data.token}` }, payload: {} });
@@ -126,7 +126,7 @@ describe('Phase 1.2 — email verification', () => {
   });
 
   it('admin can mark a client verified manually (audited)', async () => {
-    const reg = await app.inject({ method: 'POST', url: '/api/v1/auth/register', headers: { 'x-tenant-id': tenantId }, payload: { email: `manual-${stamp}@verify.test`, password: 'Password123', name: 'Manual' } });
+    const reg = await app.inject({ method: 'POST', url: '/api/v1/auth/register', headers: { 'x-tenant-id': tenantId }, payload: { email: `manual-${stamp}@verify.test`, password: 'Password123', accept_terms: true, name: 'Manual' } });
     const id = reg.json().data.user.id;
     const res = await app.inject({ method: 'PATCH', url: `/api/v1/admin/clients/${id}`, headers: { 'x-tenant-id': tenantId, authorization: `Bearer ${adminToken}` }, payload: { email_verified: true } });
     expect(res.statusCode).toBe(200);

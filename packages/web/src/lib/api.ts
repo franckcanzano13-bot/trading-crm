@@ -141,7 +141,7 @@ export async function apiFetch<T = any>(path: string, options: FetchOptions = {}
 
 // ─── Auth API ───
 export const authApi = {
-  register: (tenantId: string, body: { email: string; password: string; name: string }) =>
+  register: (tenantId: string, body: { email: string; password: string; name: string; accept_terms: true }) =>
     apiFetch('/api/v1/auth/register', { method: 'POST', body: JSON.stringify(body), tenantId }),
 
   login: (tenantId: string, body: { email: string; password: string }) =>

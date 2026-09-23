@@ -89,10 +89,16 @@ export interface Candle {
 }
 
 // ─── Auth ───
+// Phase 1.13: bump when the legal texts change; users who accepted an older
+// version can be asked to accept again at next login.
+export const TERMS_VERSION = '2026-09';
+
 export const RegisterSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8).max(128),
   name: z.string().min(1).max(255),
+  // Phase 1.13: explicit acceptance of the terms and privacy policy is mandatory.
+  accept_terms: z.literal(true, { errorMap: () => ({ message: 'You must accept the terms of service and privacy policy' }) }),
 });
 
 export const LoginSchema = z.object({

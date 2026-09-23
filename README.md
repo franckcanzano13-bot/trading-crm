@@ -152,4 +152,4 @@ SMOKE_METRICS_TOKEN=<METRICS_AUTH_TOKEN> npm run smoke -- http://127.0.0.1:5500
 
 ## What can be sold to a broker
 
-See [docs/OFFERING.md](docs/OFFERING.md) for what can be sold today and [docs/ROADMAP.md](docs/ROADMAP.md) for the path to the first paying broker. — the catalogue of options per execution mode, what is included, what is configurable, and what is still roadmap.
+See [docs/OFFERING.md](docs/OFFERING.md) for what can be sold today, [docs/ROADMAP.md](docs/ROADMAP.md) for the path to the first paying broker, [docs/broker-integration-kit.md](docs/broker-integration-kit.md) for what a broker's team does to go live, and [docs/SLA.md](docs/SLA.md) for the service levels offered. — the catalogue of options per execution mode, what is included, what is configurable, and what is still roadmap.

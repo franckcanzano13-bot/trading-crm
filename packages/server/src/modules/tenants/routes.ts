@@ -3,6 +3,7 @@ import bcrypt from 'bcrypt';
 import { z } from 'zod';
 import { prisma, createTenantSchema } from '../../shared/database/prisma';
 import { requireSuperAdmin } from '../../shared/middleware/auth';
+import { resolveTenantByHost } from '../../shared/middleware/tenant-resolver';
 import { BCRYPT_SALT_ROUNDS, ALL_INSTRUMENTS } from '@tradexlabel/shared';
 import { TenantQuery } from '../../shared/database/tenant-queries';
 import { logger, isValidLei } from '../../shared/utils/index';
@@ -19,6 +20,23 @@ const CreateTenantSchema = z.object({
 });
 
 export async function tenantRoutes(fastify: FastifyInstance) {
+  // Phase 1.4 — Public: which broker is served on this host? Lets the web
+  // app on a white-label domain skip the "Tenant ID" field. Returns only
+  // what a login page needs (identity + branding), never tenant.config.
+  fastify.get<{ Querystring: { host?: string } }>('/api/v1/tenant/resolve', {
+    config: { rateLimit: { max: 60, timeWindow: '1 minute' } },
+  }, async (request, reply) => {
+    const forwarded = request.headers['x-forwarded-host'];
+    const host = request.query.host || (Array.isArray(forwarded) ? forwarded[0] : forwarded) || request.headers.host || '';
+    const tenant = await resolveTenantByHost(host);
+    if (!tenant) return reply.status(404).send({ error: 'No broker on this domain', code: 'TENANT_NOT_FOUND' });
+    const branding = await prisma.brokerConfig.findUnique({
+      where: { tenant_id: tenant.id },
+      select: { company_name: true, logo_url: true, primary_color: true },
+    });
+    return reply.send({ data: { id: tenant.id, name: tenant.name, slug: tenant.slug, branding } });
+  });
+
   // List tenants (superadmin)
   fastify.get('/api/v1/super/tenants', {
     preHandler: [requireSuperAdmin],

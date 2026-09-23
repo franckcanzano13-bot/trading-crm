@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useMemo } from 'react';
+import { useResolvedTenant } from '@/hooks/use-resolved-tenant';
 import { formatCurrency, formatTimeAgo } from '@/lib/utils';
 
 const API = process.env.NEXT_PUBLIC_API_URL || '';
@@ -24,7 +25,7 @@ async function dealerFetch(path: string, token: string, tenantId: string, opts: 
 export default function DealerPage() {
   const [token, setToken] = useState('');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [tenantId, setTenantId] = useState('');
+  const { tenantId, setTenantId, tenant: resolvedTenant } = useResolvedTenant(); // Phase 1.4
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');

@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
-import { accountApi } from '@/lib/api';
+import { accountApi, withdrawalApi } from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
 
 const QUICK_AMOUNTS = [100, 250, 500, 1000, 2500, 5000];
@@ -65,11 +65,19 @@ export function ClientDeposit() {
   const [method, setMethod] = useState('card');
   const [account, setAccount] = useState<any>(null);
   const [success, setSuccess] = useState('');
+  const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // Phase 1.5: real withdrawal requests, decided by the broker's staff.
+  const [requests, setRequests] = useState<any[]>([]);
+  const loadRequests = () => {
+    if (!token || !tenantId) return;
+    withdrawalApi.list(token, tenantId).then(setRequests).catch(() => {});
+  };
 
   useEffect(() => {
     if (!token || !tenantId) return;
     accountApi.getAccount(token, tenantId).then(setAccount).catch(() => {});
+    withdrawalApi.list(token, tenantId).then(setRequests).catch(() => {});
   }, [token, tenantId]);
 
   const selectedMethod = PAYMENT_METHODS.find((m) => m.id === method);
@@ -81,17 +89,26 @@ export function ClientDeposit() {
     if (!isValid) return;
 
     setLoading(true);
-    // Simulate processing delay for UX
-    await new Promise((r) => setTimeout(r, 800));
-    setLoading(false);
-
-    setSuccess(
-      tab === 'deposit'
-        ? `Deposit of $${numericAmount.toLocaleString()} initiated via ${selectedMethod?.name}. Funds will appear in your account shortly.`
-        : `Withdrawal of $${numericAmount.toLocaleString()} requested via ${selectedMethod?.name}. Processing time: 1-3 business days.`
-    );
-    setAmount('');
-    setTimeout(() => setSuccess(''), 6000);
+    setError('');
+    try {
+      if (tab === 'withdraw') {
+        await withdrawalApi.request(token!, tenantId!, { amount: numericAmount, method });
+        setSuccess(`Withdrawal of $${numericAmount.toLocaleString()} requested via ${selectedMethod?.name}. Your broker will review it within 1-3 business days.`);
+        loadRequests();
+        accountApi.getAccount(token!, tenantId!).then(setAccount).catch(() => {});
+      } else {
+        // Deposits are collected by the broker's payment provider / support desk;
+        // the in-app form only records the intent until a PSP is connected (roadmap 2.5).
+        await new Promise((r) => setTimeout(r, 400));
+        setSuccess(`Deposit of $${numericAmount.toLocaleString()} via ${selectedMethod?.name}: your broker's support desk will send you the payment instructions.`);
+      }
+      setAmount('');
+      setTimeout(() => setSuccess(''), 8000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Request failed');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -304,6 +321,9 @@ export function ClientDeposit() {
           </div>
         )}
 
+        {error && (
+          <div className="bg-sell/10 border border-sell/20 rounded-xl p-4 text-sm text-sell">{error}</div>
+        )}
         {/* Success Message */}
         {success && (
           <div className="flex items-start gap-3 bg-buy/10 border border-buy/20 rounded-xl p-4 animate-in fade-in slide-in-from-top-2 duration-300">
@@ -371,6 +391,40 @@ export function ClientDeposit() {
           </p>
         </div>
       </form>
+
+      {/* Phase 1.5: withdrawal requests and their status */}
+      {requests.length > 0 && (
+        <div className="bg-card border border-border rounded-2xl card-modern overflow-hidden">
+          <div className="px-5 py-3 border-b border-border text-xs font-semibold text-muted-foreground uppercase tracking-wider">Withdrawal requests</div>
+          <table className="w-full text-sm">
+            <tbody>
+              {requests.map((r: any) => (
+                <tr key={r.id} className="border-b border-border/50 last:border-0">
+                  <td className="px-5 py-3 text-xs text-muted-foreground">{new Date(r.requested_at).toLocaleString()}</td>
+                  <td className="px-5 py-3 font-mono font-semibold">${(Number(r.amount_cents) / 100).toLocaleString()}</td>
+                  <td className="px-5 py-3">
+                    <span className={`inline-flex px-2.5 py-0.5 rounded-full text-[10px] font-semibold ${
+                      r.status === 'APPROVED' ? 'bg-green-500/10 text-green-500' :
+                      r.status === 'REJECTED' ? 'bg-red-500/10 text-red-500' :
+                      r.status === 'CANCELLED' ? 'bg-secondary text-muted-foreground' :
+                      'bg-amber-500/10 text-amber-500'
+                    }`}>{r.status}</span>
+                    {r.status === 'REJECTED' && r.reason && <div className="text-[11px] text-muted-foreground mt-1">{r.reason}</div>}
+                  </td>
+                  <td className="px-5 py-3 text-right">
+                    {r.status === 'PENDING' && (
+                      <button type="button" className="text-xs text-muted-foreground hover:text-sell transition-colors"
+                        onClick={() => withdrawalApi.cancel(token!, tenantId!, r.id).then(loadRequests).catch(() => {})}>
+                        Cancel
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

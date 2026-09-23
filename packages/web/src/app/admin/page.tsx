@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { adminApi } from '@/lib/api';
 import { formatCurrency, formatTimeAgo } from '@/lib/utils';
 
-type TabKey = 'dashboard' | 'clients' | 'instruments' | 'positions' | 'transactions';
+type TabKey = 'dashboard' | 'clients' | 'instruments' | 'positions' | 'transactions' | 'withdrawals';
 
 // ─── Deposit Modal ───
 function DepositModal({
@@ -104,6 +104,8 @@ export default function AdminPage() {
   const [instruments, setInstruments] = useState<any[]>([]);
   const [positions, setPositions] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
+  const [withdrawals, setWithdrawals] = useState<any[]>([]); // Phase 1.5
+  const loadWithdrawals = () => { if (token && tenantId) adminApi.getWithdrawals(token, tenantId).then(setWithdrawals).catch(() => {}); };
   const [tab, setTab] = useState<TabKey>('dashboard');
 
   // Client tab state
@@ -135,6 +137,7 @@ export default function AdminPage() {
     adminApi.getClients(token, tenantId).then(setClients).catch(() => {});
     adminApi.getInstruments(token, tenantId).then(setInstruments).catch(() => {});
     adminApi.getPositions(token, tenantId).then(setPositions).catch(() => {});
+    adminApi.getWithdrawals(token, tenantId).then(setWithdrawals).catch(() => {});
     adminApi.getTransactions(token, tenantId).then(setTransactions).catch(() => {});
   };
 
@@ -312,6 +315,7 @@ export default function AdminPage() {
     { key: 'clients', label: 'Clients', icon: 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z' },
     { key: 'instruments', label: 'Instruments', icon: 'M13 7h8m0 0v8m0-8l-8 8-4-4-6 6' },
     { key: 'positions', label: 'Positions', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
+    { key: 'withdrawals', label: 'Withdrawals', icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
     { key: 'transactions', label: 'Transactions', icon: 'M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z' },
   ];
 
@@ -320,6 +324,7 @@ export default function AdminPage() {
     clients: 'Manage your registered traders',
     instruments: 'Configure available trading instruments',
     positions: 'All open positions across clients',
+    withdrawals: 'Client withdrawal requests awaiting your decision',
     transactions: 'Deposits and withdrawals history',
   };
 
@@ -687,6 +692,63 @@ export default function AdminPage() {
           )}
 
           {/* ════════════════════════════════════════════ TRANSACTIONS ════════════════════════════════════════════ */}
+          {tab === 'withdrawals' && (
+            <div className="bg-card rounded-xl border border-border overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-secondary/30">
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Client</th>
+                    <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Amount</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Method</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">KYC</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Requested</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status</th>
+                    <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Decision</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {withdrawals.map((w: any) => (
+                    <tr key={w.id} className="border-b border-border/50 hover:bg-secondary/10 transition-colors">
+                      <td className="px-4 py-3">
+                        <div className="font-medium">{w.user?.name || '-'}</div>
+                        <div className="text-[11px] text-muted-foreground">{w.user?.email}</div>
+                      </td>
+                      <td className="px-4 py-3 text-right font-mono font-semibold text-amber-500">{formatCurrency(Number(w.amount_cents) / 100)}</td>
+                      <td className="px-4 py-3 text-xs">{w.method || '-'}{w.destination ? <div className="text-muted-foreground">{w.destination}</div> : null}</td>
+                      <td className="px-4 py-3 text-xs">{w.user?.kyc_status || '-'}</td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">{new Date(w.requested_at).toLocaleString()}</td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex px-2.5 py-0.5 rounded-full text-[10px] font-semibold ${
+                          w.status === 'APPROVED' ? 'bg-green-500/10 text-green-500' :
+                          w.status === 'REJECTED' ? 'bg-red-500/10 text-red-500' :
+                          w.status === 'CANCELLED' ? 'bg-secondary text-muted-foreground' :
+                          'bg-amber-500/10 text-amber-500'
+                        }`}>{w.status}</span>
+                        {w.reason && <div className="text-[11px] text-muted-foreground mt-1">{w.reason}</div>}
+                      </td>
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        {w.status === 'PENDING' && (
+                          <>
+                            <button className="px-3 py-1.5 rounded-lg bg-green-500/10 text-green-500 text-xs font-semibold hover:bg-green-500/20 mr-2"
+                              onClick={() => { if (window.confirm(`Approve withdrawal of ${formatCurrency(Number(w.amount_cents) / 100)}? The balance is debited immediately.`)) adminApi.approveWithdrawal(token, tenantId, w.id).then(() => { loadWithdrawals(); adminApi.getClients(token, tenantId).then(setClients).catch(() => {}); }).catch((e) => alert(e.message)); }}>
+                              Approve
+                            </button>
+                            <button className="px-3 py-1.5 rounded-lg bg-red-500/10 text-red-500 text-xs font-semibold hover:bg-red-500/20"
+                              onClick={() => { const reason = window.prompt('Reason shown to the client:'); if (reason) adminApi.rejectWithdrawal(token, tenantId, w.id, reason).then(loadWithdrawals).catch((e) => alert(e.message)); }}>
+                              Reject
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {withdrawals.length === 0 && (
+                    <tr><td colSpan={7} className="text-center py-12 text-muted-foreground">No withdrawal requests</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
           {tab === 'transactions' && (
             <div className="bg-card rounded-xl border border-border overflow-hidden">
               <table className="w-full text-sm">

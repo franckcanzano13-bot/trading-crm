@@ -41,6 +41,7 @@ import { emailVerificationRoutes } from './modules/auth/email-verification';
 import { instrumentRoutes } from './modules/instruments/routes';
 import { tradingRoutes } from './modules/trading/routes';
 import { accountRoutes } from './modules/accounts/routes';
+import { withdrawalRoutes } from './modules/accounts/withdrawals';
 import { adminClientRoutes } from './modules/users/routes';
 import { totpRoutes } from './modules/totp/routes';
 import { tenantRoutes } from './modules/tenants/routes';
@@ -244,6 +245,7 @@ async function buildServer() {
   await fastify.register(instrumentRoutes);
   await fastify.register(tradingRoutes);
   await fastify.register(accountRoutes);
+  await fastify.register(withdrawalRoutes); // Phase 1.5
   await fastify.register(adminClientRoutes);
   await fastify.register(totpRoutes);
   await fastify.register(tenantRoutes);

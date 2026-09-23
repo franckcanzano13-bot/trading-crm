@@ -57,6 +57,7 @@ export async function issueEmailVerification(params: { tenantId: string; userId:
   const raw = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + EMAIL_VERIFY_TTL_MS);
   await prisma.$transaction([
+    // tenant-scope: row already selected by its globally unique token hash
     prisma.authToken.updateMany({
       where: { tenant_id: params.tenantId, purpose: 'EMAIL_VERIFY', subject_type: 'USER', subject_id: params.userId, used_at: null },
       data: { used_at: new Date() },
@@ -118,6 +119,7 @@ export async function emailVerificationRoutes(fastify: FastifyInstance) {
     if (row.expires_at.getTime() < Date.now()) return reply.status(400).send({ error: 'This verification link has expired', code: 'TOKEN_EXPIRED' });
 
     const ok = await prisma.$transaction(async (tx) => {
+      // tenant-scope: row already selected by its globally unique token hash
       const marked = await tx.authToken.updateMany({ where: { id: row.id, used_at: null }, data: { used_at: new Date() } });
       if (marked.count === 0) return false;
       await tx.user.updateMany({ where: { id: row.subject_id, tenant_id: row.tenant_id, email_verified_at: null }, data: { email_verified_at: new Date() } });

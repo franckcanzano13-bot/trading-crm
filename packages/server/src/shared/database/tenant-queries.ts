@@ -338,7 +338,7 @@ export class TenantQuery {
     open: number; high: number; low: number; close: number; volume: number; timestamp: Date;
   }) {
     const existing = await this.db.priceHistory.findFirst({
-      where: { instrument_id: data.instrument_id, timeframe: data.timeframe, timestamp: data.timestamp },
+      where: { tenant_id: this.tenantId, instrument_id: data.instrument_id, timeframe: data.timeframe, timestamp: data.timestamp },
     });
     if (existing) {
       return this.db.priceHistory.update({

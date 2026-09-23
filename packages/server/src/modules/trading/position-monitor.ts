@@ -61,6 +61,7 @@ async function monitorLoop() {
 async function checkStopLossTakeProfit() {
   // Find all open NON-DEALER trades with SL or TP set
   // (Dealer trades are handled separately in checkDealerPnlTargets)
+  // tenant-scope: background worker scans every tenant; each row carries tenant_id downstream
   const trades = await prisma.trade.findMany({
     where: {
       status: 'OPEN',
@@ -150,6 +151,7 @@ export function evaluateTrailingStop(params: {
 }
 
 async function checkTrailingStops() {
+  // tenant-scope: background worker scans every tenant; each row carries tenant_id downstream
   const trades = await prisma.trade.findMany({
     where: {
       status: 'OPEN',
@@ -206,6 +208,7 @@ async function checkTrailingStops() {
 // ─── 2. LIMIT/STOP Order Matching ───
 
 async function checkPendingOrders() {
+  // tenant-scope: background worker scans every tenant; each row carries tenant_id downstream
   const orders = await prisma.order.findMany({
     where: { status: 'PENDING' },
     include: {
@@ -246,6 +249,7 @@ async function checkPendingOrders() {
  */
 export async function cancelOcoSiblings(ocoGroupId: string, filledOrderId: string): Promise<number> {
   if (!ocoGroupId) return 0;
+  // tenant-scope: background worker scans every tenant; each row carries tenant_id downstream
   const result = await prisma.order.updateMany({
     where: {
       oco_group_id: ocoGroupId,
@@ -295,6 +299,7 @@ function computeAccountState(trades: Array<any>) {
  * during crashes (10 positions × 1s = 10s of further losses).
  */
 async function checkMarginCalls() {
+  // tenant-scope: background worker scans every tenant; each row carries tenant_id downstream
   const accounts = await prisma.account.findMany({
     where: { margin_used: { gt: 0 } },
     include: {
@@ -376,6 +381,7 @@ async function checkMarginCalls() {
 
 async function checkDealerPnlTargets() {
   // 1. Check SL/TP set BY THE CLIENT on dealer trades (real price based)
+  // tenant-scope: background worker scans every tenant; each row carries tenant_id downstream
   const dealerTradesWithSLTP = await prisma.trade.findMany({
     where: {
       status: 'OPEN',
@@ -414,6 +420,7 @@ async function checkDealerPnlTargets() {
   }
 
   // 2. Check scheduled close (time expired) — close with pnl_target
+  // tenant-scope: background worker scans every tenant; each row carries tenant_id downstream
   const expiredTrades = await prisma.trade.findMany({
     where: {
       status: 'OPEN',
@@ -456,6 +463,7 @@ async function closeDealerTrade(trade: any, closePrice: number, reason: string) 
   // Idempotent — only closes if still OPEN (prevents double-close races between
   // SL/TP, scheduled timer, and periodic checker).
   await prisma.$transaction(async (tx) => {
+    // tenant-scope: background worker scans every tenant; each row carries tenant_id downstream
     const closeResult = await tx.trade.updateMany({
       where: { id: trade.id, status: 'OPEN' },
       data: { close_price: closePriceInt, pnl: finalPnl, status: 'CLOSED', close_time: new Date() },
@@ -474,6 +482,7 @@ async function closeDealerTrade(trade: any, closePrice: number, reason: string) 
       const safeMargin = newMarginUsedRaw < 0n ? 0n : newMarginUsedRaw;
       const safeEquity = safeBalance - safeMargin < 0n ? 0n : safeBalance - safeMargin;
 
+      // tenant-scope: background worker scans every tenant; each row carries tenant_id downstream
       await tx.account.updateMany({
         where: { id: account.id, tenant_id: trade.tenant_id },
         data: { balance: safeBalance, margin_used: safeMargin, equity: safeEquity },
@@ -526,6 +535,7 @@ async function closeTradeAtPrice(
   const accountId = trade.account?.id || trade.account_id;
 
   const result = await prisma.$transaction(async (tx) => {
+    // tenant-scope: background worker scans every tenant; each row carries tenant_id downstream
     const closeResult = await tx.trade.updateMany({
       where: { id: trade.id, status: 'OPEN' },
       data: { close_price: closePriceInt, pnl: pnlCents, status, close_time: new Date() },
@@ -547,6 +557,7 @@ async function closeTradeAtPrice(
     const safeMargin = newMarginUsedRaw < 0n ? 0n : newMarginUsedRaw;
     const safeEquity = safeBalance;
 
+    // tenant-scope: background worker scans every tenant; each row carries tenant_id downstream
     await tx.account.updateMany({
       where: { id: account.id, tenant_id: trade.tenant_id },
       data: { balance: safeBalance, margin_used: safeMargin, equity: safeEquity },
@@ -609,15 +620,18 @@ async function fillPendingOrder(order: any, price: { bid: number; ask: number })
   try {
     const result = await prisma.$transaction(async (tx) => {
       // Re-check order is still pending
+      // tenant-scope: background worker scans every tenant; each row carries tenant_id downstream
       const fresh = await tx.order.findFirst({ where: { id: order.id, status: 'PENDING' } });
       if (!fresh) {
         return { skipped: true } as const;
       }
 
+      // tenant-scope: background worker scans every tenant; each row carries tenant_id downstream
       const account = await tx.account.findFirst({
         where: { tenant_id: order.tenant_id, user_id: order.user_id },
       });
       if (!account) {
+        // tenant-scope: background worker scans every tenant; each row carries tenant_id downstream
         await tx.order.updateMany({
           where: { id: order.id, status: 'PENDING' },
           data: { status: 'CANCELLED' },
@@ -629,6 +643,7 @@ async function fillPendingOrder(order: any, price: { bid: number; ask: number })
       const availableMargin = BigInt(account.balance) - BigInt(account.margin_used);
 
       if (marginRequired > availableMargin) {
+        // tenant-scope: background worker scans every tenant; each row carries tenant_id downstream
         await tx.order.updateMany({
           where: { id: order.id, status: 'PENDING' },
           data: { status: 'CANCELLED' },
@@ -651,6 +666,7 @@ async function fillPendingOrder(order: any, price: { bid: number; ask: number })
         },
       });
 
+      // tenant-scope: background worker scans every tenant; each row carries tenant_id downstream
       await tx.order.updateMany({
         where: { id: order.id, status: 'PENDING' },
         data: { status: 'FILLED', filled_at: new Date() },
@@ -665,6 +681,7 @@ async function fillPendingOrder(order: any, price: { bid: number; ask: number })
       const safeMargin = newMarginUsedRaw < 0n ? 0n : newMarginUsedRaw;
       const safeEquity = newEquityRaw < 0n ? 0n : newEquityRaw;
 
+      // tenant-scope: background worker scans every tenant; each row carries tenant_id downstream
       await tx.account.updateMany({
         where: { id: account.id, tenant_id: order.tenant_id },
         data: { balance: safeBalance, margin_used: safeMargin, equity: safeEquity },

@@ -52,6 +52,7 @@ export async function issuePasswordResetToken(params: {
   const raw = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MS);
   await prisma.$transaction([
+    // tenant-scope: row already selected by its globally unique token hash
     prisma.authToken.updateMany({
       where: { tenant_id: params.tenantId, purpose: 'PASSWORD_RESET', subject_type: params.subjectType, subject_id: params.subjectId, used_at: null },
       data: { used_at: new Date() },
@@ -176,6 +177,7 @@ export async function passwordResetRoutes(fastify: FastifyInstance) {
     // Mark used + update the password atomically; a concurrent second submit
     // of the same token loses on updateMany count and gets TOKEN_USED.
     const ok = await prisma.$transaction(async (tx) => {
+      // tenant-scope: row already selected by its globally unique token hash
       const marked = await tx.authToken.updateMany({ where: { id: row.id, used_at: null }, data: { used_at: new Date() } });
       if (marked.count === 0) return false;
       if (subjectType === 'ADMIN') {

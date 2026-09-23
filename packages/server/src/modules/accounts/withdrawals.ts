@@ -149,7 +149,7 @@ export async function withdrawalRoutes(fastify: FastifyInstance) {
         });
         await recordWithdrawal(tx, { tenantId, accountId: account.id, amountCents: wr.amount_cents, reference: `transaction:${transaction.id}`, description: `Withdrawal request ${wr.id}` });
         const marked = await tx.withdrawalRequest.updateMany({
-          where: { id: wr.id, status: 'PENDING' },
+          where: { id: wr.id, tenant_id: tenantId, status: 'PENDING' },
           data: { status: 'APPROVED', decided_at: new Date(), decided_by: adminId, transaction_id: transaction.id },
         });
         if (marked.count === 0) throw new Error('NOT_PENDING');

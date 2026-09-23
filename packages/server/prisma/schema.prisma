@@ -700,3 +700,28 @@ model WithdrawalRequest {
   @@index([tenant_id, user_id])
   @@map("withdrawal_requests")
 }
+
+// Phase 2.5a — Client deposit declarations ("I sent X by <method>"). The
+// account is credited only when staff confirm, in one transaction with the
+// DEPOSIT row and the segregation ledger. credited_cents may differ from
+// amount_cents (fees, partial payment).
+model DepositRequest {
+  id             String    @id @default(uuid())
+  tenant_id      String
+  account_id     String
+  user_id        String
+  amount_cents   BigInt
+  credited_cents BigInt?
+  method         String    @default("")
+  reference      String    @default("")
+  status         String    @default("PENDING") // PENDING | CONFIRMED | REJECTED | CANCELLED
+  reason         String    @default("")
+  declared_at    DateTime  @default(now())
+  decided_at     DateTime?
+  decided_by     String?
+  transaction_id String?
+
+  @@index([tenant_id, status, declared_at])
+  @@index([tenant_id, user_id])
+  @@map("deposit_requests")
+}

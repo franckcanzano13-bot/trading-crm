@@ -206,6 +206,16 @@ export const accountApi = {
     apiFetch('/api/v1/account/transactions', { token, tenantId }),
 };
 
+// ─── Deposits (Phase 2.5a) ───
+export const depositApi = {
+  declare: (token: string, tenantId: string, body: { amount: number; method: string; reference?: string }) =>
+    apiFetch('/api/v1/deposits', { method: 'POST', body: JSON.stringify(body), token, tenantId }),
+  list: (token: string, tenantId: string) =>
+    apiFetch('/api/v1/deposits', { token, tenantId }),
+  cancel: (token: string, tenantId: string, id: string) =>
+    apiFetch(`/api/v1/deposits/${id}/cancel`, { method: 'POST', body: '{}', token, tenantId }),
+};
+
 // ─── Withdrawals (Phase 1.5) ───
 export const withdrawalApi = {
   request: (token: string, tenantId: string, body: { amount: number; method?: string; destination?: string }) =>
@@ -225,6 +235,13 @@ export const adminApi = {
     apiFetch('/api/v1/admin/billing/checkout', { method: 'POST', body: JSON.stringify({ plan_id: planId }), token, tenantId }),
   openBillingPortal: (token: string, tenantId: string) =>
     apiFetch('/api/v1/admin/billing/portal', { method: 'POST', body: '{}', token, tenantId }),
+  // Phase 2.5a — deposit confirmations
+  getDeposits: (token: string, tenantId: string, status?: string) =>
+    apiFetch(`/api/v1/admin/deposits${status ? `?status=${status}` : ''}`, { token, tenantId }),
+  confirmDeposit: (token: string, tenantId: string, id: string, amountReceived?: number) =>
+    apiFetch(`/api/v1/admin/deposits/${id}/confirm`, { method: 'POST', body: JSON.stringify(amountReceived ? { amount_received: amountReceived } : {}), token, tenantId }),
+  rejectDeposit: (token: string, tenantId: string, id: string, reason: string) =>
+    apiFetch(`/api/v1/admin/deposits/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }), token, tenantId }),
   // Phase 1.5 — withdrawal decisions
   getWithdrawals: (token: string, tenantId: string, status?: string) =>
     apiFetch(`/api/v1/admin/withdrawals${status ? `?status=${status}` : ''}`, { token, tenantId }),

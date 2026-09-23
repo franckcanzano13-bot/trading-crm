@@ -22,6 +22,22 @@ api.staging.tradexlabel.com   A  <host ip>
 
 Traefik obtains certificates on first request; DNS must resolve before the first `deploy.sh`.
 
+### White-label broker domains (Phase 1.4)
+
+A broker served on its own domain needs two records pointing at the same
+host, and `tenant.domain` set to the bare domain (`trade.acme.com`):
+
+```
+trade.acme.com       CNAME  staging.tradexlabel.com
+api.trade.acme.com   CNAME  api.staging.tradexlabel.com
+```
+
+Traefik must know the extra hosts: add them to the `traefik.http.routers.*.rule`
+labels in docker-compose.yml (`Host(\`staging.tradexlabel.com\`) || Host(\`trade.acme.com\`)`),
+and build the web image with `NEXT_PUBLIC_API_URL` empty so the browser calls
+`/api` on the broker domain and Next's rewrites forward to the api container.
+The API resolves the tenant from `X-Forwarded-Host`.
+
 ## 3. Files on the host
 
 ```bash

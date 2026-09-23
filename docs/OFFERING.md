@@ -37,7 +37,7 @@ plan) · **Roadmap** = pas encore livré.
 | Sources de prix | Binance (crypto), Finnhub (forex), TwelveData (indices/commodités), Frankfurter/Yahoo (gratuit), mock de secours ; détection de spikes/gaps | Config (clés API) |
 | Spread markup | Par instrument et par tenant | Config |
 | Historique & P&L | Positions ouvertes avec P&L temps réel, historique des trades, transactions | Inclus |
-| Comptes | Multi-devises (champ `currency`), dépôts/retraits via back-office | Inclus |
+| Comptes | Multi-devises (champ `currency`), dépôts via back-office, **demandes de retrait client validées par le staff** (KYC approuvé requis, solde libre re-vérifié à l'approbation, ledger de ségrégation) | Inclus |
 | Notifications trader | Margin call, stop-out, ordre exécuté, trade fermé, dépôt, retrait (WebSocket + email) | Inclus |
 
 ## 3. Back-office broker
@@ -45,10 +45,13 @@ plan) · **Roadmap** = pas encore livré.
 | Option | Détail | Activation |
 |---|---|---|
 | Dashboard | Vue d'ensemble, stats, positions ouvertes globales | Inclus |
-| Gestion clients | Statuts, KYC, comptes, dépôts/retraits manuels audités | Inclus |
+| Gestion clients | Statuts, KYC, comptes, dépôts manuels audités, file des demandes de retrait (approuver / refuser avec motif), confirmation d'email manuelle | Inclus |
 | Instruments | Activation, spreads, pip/lot size par tenant | Inclus |
 | Rôles staff | Admin, Seller (conversion), Retention (dealing), données scopées par rôle | Inclus |
 | 2FA staff | TOTP (Google Authenticator, Authy, 1Password), codes de secours, reset par le superadmin en cas de perte de device | Inclus |
+| Mot de passe oublié | Traders et staff, lien signé 30 min à usage unique, email aux couleurs du broker, audité | Inclus |
+| Vérification d'email | Inscription trader confirmée par email (24 h), trading bloqué tant que non confirmée, désactivable par broker | Config |
+| Domaine white-label | Le broker est reconnu à partir de son domaine (`trade.broker.com`, `api.` / `www.`) ; les clients ne saisissent jamais d'identifiant | Config (CNAME) |
 | IP whitelist | Liste d'IP autorisées pour le CRM/back-office | Config |
 | Branding | Nom société, logo, couleur primaire, site, support, adresse ; emails aux couleurs du broker | Config |
 | SMTP dédié | Serveur SMTP du broker (mot de passe chiffré AES-256-GCM) | Config |
@@ -102,17 +105,19 @@ Plans seedés, modifiables via `/api/v1/super/plans` :
 
 Souscriptions, factures et paiement sont gérés côté superadmin (`/super/subscriptions`, `/super/invoices`).
 
-> Les plafonds `max_users` / `max_instruments` sont stockés mais **pas encore
-> appliqués** à la création d'utilisateurs ou d'instruments. Voir Roadmap.
+Les plafonds `max_users` / `max_instruments` sont **appliqués** : refus à
+l'inscription et à la conversion CRM au-delà du nombre de clients, refus
+d'activation d'instrument au-delà du nombre autorisé, chaque refus audité
+(`PLAN_LIMIT_HIT`) et l'usage exposé sur le tableau de bord du broker. Un
+tenant sans abonnement actif n'a pas de plafond (sandbox, démo).
 
 ## 8. Roadmap (non livré, à ne pas vendre comme disponible)
 
 - Connexion réelle à un liquidity provider (A-Book STP), hedging automatique.
-- Application des quotas de plan (`max_users`, `max_instruments`).
 - 2FA pour les traders (uniquement staff aujourd'hui).
 - Passkeys / WebAuthn pour le staff.
 - Passerelles de paiement (PSP, crypto) : les dépôts sont manuels via back-office.
-- Domaines personnalisés automatisés (le champ existe, pas de provisioning DNS/TLS).
+- Provisioning automatique DNS/TLS des domaines personnalisés (la résolution par domaine fonctionne, le certificat et le CNAME restent manuels).
 - Application mobile.
 - Copy trading / signaux.
 - Réconciliation bancaire externe du ledger de ségrégation.

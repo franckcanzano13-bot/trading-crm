@@ -21,11 +21,11 @@ Ce qui empêche physiquement de livrer aujourd'hui.
 
 **Porte de sortie** : `main` protégée, CI complète verte sur GitHub, staging accessible en HTTPS avec les données de seed.
 
-**État au 22 septembre 2026** — tout ce qui se fait dans le dépôt est livré, le reste attend le propriétaire GitHub et un serveur :
-- 0.1 : commits prêts, `CODEOWNERS` et template de PR en place ; **push et protection de branche à faire par le propriétaire** ([runbook](runbooks/phase0-github-setup.md)).
-- 0.2 : job CI Docker écrit ; **s'exécutera au premier push**.
-- 0.3 : `.github/dependabot.yml` livré (npm groupé, Actions, Docker) ; **alertes à activer dans les réglages du dépôt**.
-- 0.4 : stack staging complète en infrastructure-as-code (`deploy/staging/` : Traefik + TLS, api ×2, worker, web, Postgres, Redis, script de déploiement avec smoke), publication des images sur GHCR et déploiement SSH automatique après CI verte ; **il manque un VPS, deux enregistrements DNS et trois secrets GitHub** ([runbook](../deploy/staging/README.md)).
+**État au 23 septembre 2026 — Phase 0 terminée.**
+- 0.1 : commits poussés, `main` protégée (PR obligatoire, trois checks CI requis, branche à jour, administrateurs inclus). Chaque changement passe désormais par une PR.
+- 0.2 : le job CI Docker a tourné. Il a révélé et fait corriger trois problèmes : le paquet `shared` n'était jamais construit avant le typecheck (la CI était rouge depuis mai sans que personne ne le voie), l'image regulated ne compilait pas (import statique du module dealer), et **l'API mourait au démarrage dès que Binance répondait HTTP 451** (blocage géographique) — un broker hébergé dans une zone bloquée aurait eu le même crash en boucle. Les trois images se construisent, démarrent et répondent au healthcheck.
+- 0.3 : Dependabot actif avec alertes de sécurité ; premières PR de dépendances ouvertes ; les majors Prisma / Next / React sont exclus des bumps hebdomadaires (Prisma 7 est une migration planifiée).
+- 0.4 : images publiées sur GHCR après chaque CI verte (`api`, `api-regulated`, `web`) ; le déploiement staging est en attente d'un VPS, de deux enregistrements DNS et de trois secrets GitHub ([runbook](../deploy/staging/README.md)).
 
 ---
 
@@ -62,6 +62,15 @@ Ce qu'un premier client remarquerait le premier jour. Classé par risque.
 | 1.13 | Documents juridiques : CGU plateforme, politique de confidentialité, **DPA** broker ↔ TradeXLabel, durée de rétention des données et des logs d'audit, mentions RGPD dans le CRM (leads = données personnelles). Rédaction par un juriste, intégration côté produit. | 1 j (intégration) |
 
 **Porte de sortie** : un compte trader peut naître, perdre son mot de passe et retirer ses fonds sans intervention manuelle ; un broker peut être servi sur son propre domaine ; une panne à 3 h du matin déclenche une alerte et un runbook.
+
+**État au 23 septembre 2026 — Phase 1 en cours.** Livré en PR, chacune testée sur PostgreSQL :
+- 1.1 mot de passe oublié (traders et staff) — **fusionné**.
+- 1.2 vérification d'email + rate-limit inscription — PR 18.
+- 1.3 quotas de plan appliqués (`max_users`, `max_instruments`) — PR 19.
+- 1.4 résolution du broker par son domaine, page de login sans identifiant à saisir — PR 20.
+- 1.5 demandes de retrait client avec validation staff (le formulaire de retrait était une simulation) — PR 21.
+- Restent : 1.6 à 1.13 (sauvegardes, supervision, logs, runbooks, Playwright en CI, pentest, règle tenant_id, juridique).
+
 
 ---
 

@@ -159,6 +159,7 @@ jobs:
             -e DATABASE_URL=postgresql://tradexlabel:ci@ci-pg:5432/tradexlabel \
             -w /app/packages/server tradexlabel/api:ci npx prisma migrate deploy
           docker run -d --name ci-api --network ci-net -p 5500:5500 \
+            -e NODE_OPTIONS="--trace-exit --trace-uncaught" \
             -e DATABASE_URL=postgresql://tradexlabel:ci@ci-pg:5432/tradexlabel \
             -e JWT_SECRET=ci-test-jwt-secret-must-be-long-enough \
             -e JWT_REFRESH_SECRET=ci-test-refresh-secret-must-be-long-enough \
@@ -168,7 +169,17 @@ jobs:
           for i in $(seq 1 40); do curl -fsS http://127.0.0.1:5500/api/v1/health >/dev/null 2>&1 && break; sleep 1; done
           if ! curl -fsS http://127.0.0.1:5500/api/v1/health; then
             echo "::error::api container did not become healthy"; echo "--- docker ps"; docker ps -a
-            echo "--- api logs"; docker logs ci-api 2>&1 | tail -80; exit 1
+            echo "--- inspect"; docker inspect ci-api --format 'ExitCode={{.State.ExitCode}} OOMKilled={{.State.OOMKilled}} Error={{.State.Error}} StartedAt={{.State.StartedAt}} FinishedAt={{.State.FinishedAt}}'
+            echo "--- api logs (full)"; docker logs ci-api 2>&1
+            echo "--- bisect: api-only (no position monitor), attached, 15s"
+            timeout 15 docker run --rm --network ci-net -e RUN_AS_API_ONLY=1 -e NODE_OPTIONS="--trace-exit --trace-uncaught" \
+              -e DATABASE_URL=postgresql://tradexlabel:ci@ci-pg:5432/tradexlabel \
+              -e JWT_SECRET=ci-test-jwt-secret-must-be-long-enough -e JWT_REFRESH_SECRET=ci-test-refresh-secret-must-be-long-enough \
+              -e ENCRYPTION_KEY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+              -e METRICS_AUTH_TOKEN=ci-metrics -e CORS_ALLOWED_ORIGINS=http://localhost tradexlabel/api:ci; echo "api-only exit: $?"
+            echo "--- bisect: node sanity inside the image"
+            docker run --rm tradexlabel/api:ci node -e "console.log('node ok', process.version, process.getuid && process.getuid())"
+            exit 1
           fi
           echo; docker logs ci-api 2>&1 | tail -20
 

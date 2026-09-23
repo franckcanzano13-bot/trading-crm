@@ -26,17 +26,11 @@ updates:
     commit-message:
       prefix: "chore(deps)"
     ignore:
-      # Prisma 7 is a planned migration (config file, driver adapters), not a
-      # weekly bump. Same for Next / React majors. Patch + minor still flow.
-      - dependency-name: "prisma"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "@prisma/client"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "next"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "react"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "react-dom"
+      # Majors are taken deliberately in a dedicated upgrade PR with tests
+      # (ADR-011: Fastify 5 / Next 16), never as weekly bumps. Patch and minor
+      # updates keep flowing and the security-updates feature still opens PRs
+      # for vulnerable ranges whatever the semver level.
+      - dependency-name: "*"
         update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions

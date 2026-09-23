@@ -1,0 +1,39 @@
+# Phase 1.8 — Promtail tails every container of the compose project through
+# the Docker socket and parses the pino JSON lines the api emits, so Grafana
+# can filter by level, tenant and request id.
+server:
+  http_listen_port: 9080
+positions:
+  filename: /tmp/positions.yaml
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 15s
+        filters:
+          - name: label
+            values: ["com.docker.compose.project=tradexlabel-staging"]
+    relabel_configs:
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: service
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: container
+    pipeline_stages:
+      - match:
+          selector: '{service=~"api|position-monitor"}'
+          stages:
+            - json:
+                expressions:
+                  level: level
+                  msg: msg
+                  tenantId: tenantId
+                  reqId: reqId
+            - template:
+                source: level_name
+                template: '{{ if eq .level "60" }}fatal{{ else if eq .level "50" }}error{{ else if eq .level "40" }}warn{{ else if eq .level "30" }}info{{ else }}debug{{ end }}'
+            - labels:
+                level_name:
+                tenantId:

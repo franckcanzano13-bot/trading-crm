@@ -43,7 +43,7 @@ The API resolves the tenant from `X-Forwarded-Host`.
 ```bash
 sudo mkdir -p /opt/tradexlabel && sudo chown deploy:deploy /opt/tradexlabel
 # from the repo, on your machine:
-scp -r deploy/staging/docker-compose.yml deploy/staging/deploy.sh deploy/staging/.env.example deploy/staging/monitoring \
+scp -r deploy/staging/docker-compose.yml deploy/staging/deploy.sh deploy/staging/backup.sh deploy/staging/.env.example deploy/staging/monitoring \
     scripts/smoke-api.mjs deploy@<host>:/opt/tradexlabel/
 ssh deploy@<host> 'cd /opt/tradexlabel && cp .env.example .env && chmod 600 .env && chmod +x deploy.sh'
 ```
@@ -88,7 +88,7 @@ Copy the two tenant ids the seed prints into `/opt/tradexlabel/.env` (`SMOKE_TEN
 | Redeploy current main | `bash deploy.sh` |
 | Roll back | `IMAGE_TAG=<12-char sha from GHCR> bash deploy.sh` |
 | Logs | `docker compose logs -f api position-monitor web` |
-| Database backup | `docker compose exec -T postgres pg_dump -U tradexlabel tradexlabel \| gzip > backup-$(date +%F).sql.gz` |
+| Database backup | automatic: the `backup` sidecar writes `db-<date>.dump.gz` to `$BACKUP_DIR` daily (see section 9); on demand: `docker compose exec backup sh -c 'pg_dump -Fc $PGDATABASE | gzip > /backups/manual-$(date +%F-%H%M).dump.gz'` |
 | Restore | `gunzip -c backup.sql.gz \| docker compose exec -T postgres psql -U tradexlabel tradexlabel` |
 | Metrics | `curl -H "Authorization: Bearer $METRICS_AUTH_TOKEN" https://api.<domain>/metrics` |
 | API docs | `https://api.<domain>/api/docs` (EXPOSE_API_DOCS=1 on staging only) |
@@ -106,3 +106,19 @@ from `METRICS_AUTH_TOKEN` so Prometheus can scrape every api replica.
 - Alerts (`monitoring/alerts.yml`): API down, 5xx > 2%, order p95 > 1s, position monitor stale, **segregation drift ≠ 0**, price source down or silent. Each carries the runbook to open.
 
 Not yet covered: the position-monitor worker has no /metrics endpoint of its own; `PositionMonitorStale` only fires when the monitor runs inside the api process (RUN_AS_API_ONLY unset). Roadmap item.
+
+## 8. Logs (Phase 1.8)
+
+Promtail tails every container of the compose project through the Docker
+socket and ships to Loki (30 days). The api's pino JSON lines are parsed:
+Grafana → Explore → Loki, e.g. `{service="api", level_name="error"}` or
+`{service="api"} |= "tenantId\":\"<id>"`. Loki is internal only.
+
+## 9. Backups (Phase 1.6)
+
+The `backup` sidecar (postgres:16-alpine + `backup.sh`) runs `pg_dump -Fc`
+every 24 h into `BACKUP_DIR` on the host (default `/var/backups/tradexlabel`)
+and prunes dumps older than `BACKUP_KEEP_DAYS`. A local copy is not a backup:
+set `RCLONE_REMOTE` (and bake rclone into the image, or run rclone from a host
+cron) to push each dump to object storage with versioning. Restore and the
+quarterly drill: `docs/runbooks/restore-database.md`.

@@ -2,6 +2,7 @@
 // Phase 1.2 — Landing page of the "confirm your email" link.
 // URL: /verify-email?tenant=<id>&token=<raw>
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { authApi } from '@/lib/api';
 
 export default function VerifyEmailPage() {
@@ -30,7 +31,7 @@ export default function VerifyEmailPage() {
         {state === 'done' && (
           <div className="text-sm text-foreground bg-primary/10 border border-primary/20 rounded-lg px-4 py-3">
             Your email is confirmed. Trading is now enabled on your account.
-            <div className="mt-4"><a href="/" className="text-xs text-primary hover:underline">Go to the trading terminal</a></div>
+            <div className="mt-4"><Link href="/" className="text-xs text-primary hover:underline">Go to the trading terminal</Link></div>
           </div>
         )}
         {state === 'missing' && (
@@ -42,7 +43,7 @@ export default function VerifyEmailPage() {
           <div className="text-sm text-sell bg-sell/10 border border-sell/20 rounded-lg px-4 py-3">
             {message}
             <div className="mt-3 text-xs text-muted-foreground">Sign in and request a new link if this one has expired.</div>
-            <div className="mt-4"><a href="/" className="text-xs text-primary hover:underline">Back to sign in</a></div>
+            <div className="mt-4"><Link href="/" className="text-xs text-primary hover:underline">Back to sign in</Link></div>
           </div>
         )}
       </div>

@@ -2,6 +2,7 @@
 // docs/legal/*.md (drafts until counsel signs off); these pages embed the
 // same text so the links in the registration form always resolve.
 import type { ReactNode } from 'react';
+import Link from 'next/link';
 
 function renderMarkdown(md: string): ReactNode[] {
   const out: ReactNode[] = [];
@@ -32,7 +33,7 @@ export function LegalPage({ markdown }: { markdown: string }) {
           </div>
         )}
         {renderMarkdown(markdown.replace(/\[\[LAWYER:[^\]]*\]\]/g, ''))}
-        <div className="pt-6"><a href="/" className="text-xs text-primary hover:underline">Back</a></div>
+        <div className="pt-6"><Link href="/" className="text-xs text-primary hover:underline">Back</Link></div>
       </article>
     </main>
   );

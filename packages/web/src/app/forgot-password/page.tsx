@@ -3,6 +3,7 @@
 // and broker staff (type=admin). Always shows the same confirmation whether
 // or not the email exists (no account enumeration).
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { authApi } from '@/lib/api';
 
 export default function ForgotPasswordPage() {
@@ -51,7 +52,7 @@ export default function ForgotPasswordPage() {
         {done ? (
           <div className="text-sm text-foreground bg-primary/10 border border-primary/20 rounded-lg px-4 py-3">
             If an account exists for <span className="font-medium">{email}</span>, a reset link has been sent. It is valid for 30 minutes.
-            <div className="mt-4"><a href="/" className="text-xs text-primary hover:underline">Back to sign in</a></div>
+            <div className="mt-4"><Link href="/" className="text-xs text-primary hover:underline">Back to sign in</Link></div>
           </div>
         ) : (
           <form onSubmit={submit} className="space-y-4">
@@ -69,7 +70,7 @@ export default function ForgotPasswordPage() {
               {loading ? 'Sending…' : 'Send reset link'}
             </button>
             <div className="text-center">
-              <a href={type === 'admin' ? '/crm' : '/'} className="text-xs text-muted-foreground hover:text-primary transition-colors">Back to sign in</a>
+              <Link href={type === 'admin' ? '/crm' : '/'} className="text-xs text-muted-foreground hover:text-primary transition-colors">Back to sign in</Link>
             </div>
           </form>
         )}

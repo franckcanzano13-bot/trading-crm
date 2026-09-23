@@ -2,6 +2,7 @@
 // Phase 1.1 — Landing page of the reset link sent by email.
 // URL: /reset-password?type=user|admin&tenant=<id>&token=<raw>
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { authApi } from '@/lib/api';
 
 export default function ResetPasswordPage() {
@@ -51,12 +52,12 @@ export default function ResetPasswordPage() {
 
         {!token ? (
           <div className="text-sm text-sell bg-sell/10 border border-sell/20 rounded-lg px-4 py-3">
-            This link is missing its token. Request a new one from the <a href={`/forgot-password?type=${type}`} className="underline">forgot password</a> page.
+            This link is missing its token. Request a new one from the <Link href={`/forgot-password?type=${type}`} className="underline">forgot password</Link> page.
           </div>
         ) : done ? (
           <div className="text-sm text-foreground bg-primary/10 border border-primary/20 rounded-lg px-4 py-3">
             Your password has been changed.
-            <div className="mt-4"><a href={backHref} className="text-xs text-primary hover:underline">Sign in</a></div>
+            <div className="mt-4"><Link href={backHref} className="text-xs text-primary hover:underline">Sign in</Link></div>
           </div>
         ) : (
           <form onSubmit={submit} className="space-y-4">

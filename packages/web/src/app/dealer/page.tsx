@@ -311,7 +311,7 @@ export default function DealerPage() {
             <div className="space-y-6">
               <div>
                 <h1 className="text-2xl font-bold text-foreground">Dealing Desk</h1>
-                <p className="text-sm text-muted-foreground mt-1">Vue d'ensemble des positions et clients</p>
+                <p className="text-sm text-muted-foreground mt-1">Vue d&apos;ensemble des positions et clients</p>
               </div>
 
               {/* Quick stats */}
@@ -494,7 +494,7 @@ export default function DealerPage() {
                       className="w-full bg-background border border-border rounded-lg text-sm px-3.5 py-2.5 text-foreground focus:outline-none focus:ring-2 focus:ring-red-500/30" />
                   </div>
                   <div>
-                    <label className="text-xs text-muted-foreground font-semibold block mb-1.5">Prix d'ouverture</label>
+                    <label className="text-xs text-muted-foreground font-semibold block mb-1.5">Prix d&apos;ouverture</label>
                     <input type="number" step="any" value={tradePrice} onChange={e => setTradePrice(e.target.value)} placeholder="Auto"
                       className="w-full bg-background border border-border rounded-lg text-sm px-3.5 py-2.5 text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-red-500/30" />
                   </div>
@@ -550,7 +550,7 @@ export default function DealerPage() {
                       Duree avant fermeture
                     </label>
                     <p className="text-[10px] text-muted-foreground/60 mb-2">
-                      Le trade s'ouvre, le P&L fluctue en temps reel, puis se ferme automatiquement au resultat choisi.
+                      Le trade s&apos;ouvre, le P&L fluctue en temps reel, puis se ferme automatiquement au resultat choisi.
                     </p>
                     <div className="flex gap-2">
                       <div className="relative flex-1">
@@ -690,7 +690,7 @@ export default function DealerPage() {
             <div className="space-y-6">
               <div>
                 <h1 className="text-2xl font-bold text-foreground">Positions Ouvertes</h1>
-                <p className="text-sm text-muted-foreground mt-1">Cliquez sur "Fermer" pour choisir le P&L</p>
+                <p className="text-sm text-muted-foreground mt-1">Cliquez sur &quot;Fermer&quot; pour choisir le P&L</p>
               </div>
 
               <div className="bg-card rounded-xl border border-border overflow-hidden">

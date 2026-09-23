@@ -4,6 +4,7 @@ import { RegisterSchema, LoginSchema, BCRYPT_SALT_ROUNDS } from '@tradexlabel/sh
 import { tenantResolver } from '../../shared/middleware/tenant-resolver';
 import { requireAuth } from '../../shared/middleware/auth';
 import { serializeBigInt, logger } from '../../shared/utils/index';
+import { checkUserQuota, auditQuotaHit, quotaMessages } from '../../shared/quotas';
 import { issueEmailVerification, tenantRequiresEmailVerification } from './email-verification';
 
 export async function authRoutes(fastify: FastifyInstance) {
@@ -26,6 +27,13 @@ export async function authRoutes(fastify: FastifyInstance) {
     const existing = await tq.findUserByEmail(email);
     if (existing) {
       return reply.status(409).send({ error: 'Email already registered', code: 'EMAIL_EXISTS' });
+    }
+
+    // Phase 1.3: plan quota (max_users). No subscription → unlimited.
+    const quota = await checkUserQuota(request.tenantId!);
+    if (!quota.ok) {
+      await auditQuotaHit({ tenantId: request.tenantId!, kind: 'users', check: quota, ip: request.ip });
+      return reply.status(403).send({ error: quotaMessages.users(quota), code: 'PLAN_LIMIT_USERS' });
     }
 
     const passwordHash = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);

@@ -42,9 +42,12 @@ test.describe('Full Site E2E Test', () => {
     await page.goto(BASE);
     await page.waitForLoadState('networkidle');
 
-    // Clear broker ID and try to submit
+    // Clear broker ID and try to submit. Email/password are no longer pre-filled
+    // (Sprint 8.1), and they are `required`, so fill them or the browser blocks submit.
     const brokerInput = page.locator('input[placeholder="Enter your broker UUID"]');
     await brokerInput.fill('');
+    await page.locator('input[type="email"]').fill(EMAIL);
+    await page.locator('input[type="password"]').fill(PASSWORD);
     await page.locator('button[type="submit"]').click();
 
     // Should show error
@@ -120,7 +123,7 @@ test.describe('Full Site E2E Test', () => {
     console.log(`  Trading - Sidebar visible: ${sidebarVisible}`);
 
     // Check instruments loaded
-    const instrumentCount = await page.locator('text=instruments').first().textContent().catch(() => '');
+    const instrumentCount = await page.locator('text=instruments').first().textContent({ timeout: 3000 }).catch(() => '');
     console.log(`  Trading - Instruments: ${instrumentCount}`);
 
     // Check chart toolbar

@@ -266,7 +266,7 @@ jobs:
       - name: Run Playwright
         env:
           CI: 'true'
-          E2E_BASE_URL: 'http://127.0.0.1:3000'
+          E2E_BASE_URL: 'http://localhost:3000'
           E2E_TENANT_ID: ${{ steps.seed.outputs.demo }}
           E2E_DEALER_TENANT_ID: ${{ steps.seed.outputs.dealer }}
         run: npx playwright test

@@ -206,8 +206,26 @@ export const accountApi = {
     apiFetch('/api/v1/account/transactions', { token, tenantId }),
 };
 
+// ─── Withdrawals (Phase 1.5) ───
+export const withdrawalApi = {
+  request: (token: string, tenantId: string, body: { amount: number; method?: string; destination?: string }) =>
+    apiFetch('/api/v1/withdrawals', { method: 'POST', body: JSON.stringify(body), token, tenantId }),
+  list: (token: string, tenantId: string) =>
+    apiFetch('/api/v1/withdrawals', { token, tenantId }),
+  cancel: (token: string, tenantId: string, id: string) =>
+    apiFetch(`/api/v1/withdrawals/${id}/cancel`, { method: 'POST', body: '{}', token, tenantId }),
+};
+
 // ─── Admin API ───
 export const adminApi = {
+  // Phase 1.5 — withdrawal decisions
+  getWithdrawals: (token: string, tenantId: string, status?: string) =>
+    apiFetch(`/api/v1/admin/withdrawals${status ? `?status=${status}` : ''}`, { token, tenantId }),
+  approveWithdrawal: (token: string, tenantId: string, id: string) =>
+    apiFetch(`/api/v1/admin/withdrawals/${id}/approve`, { method: 'POST', body: '{}', token, tenantId }),
+  rejectWithdrawal: (token: string, tenantId: string, id: string, reason: string) =>
+    apiFetch(`/api/v1/admin/withdrawals/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }), token, tenantId }),
+
   login: (body: { email: string; password: string; tenant_id: string }) =>
     apiFetch('/api/v1/admin/login', { method: 'POST', body: JSON.stringify(body) }),
 

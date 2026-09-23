@@ -670,3 +670,25 @@ model AuthToken {
   @@index([tenant_id, purpose, subject_type, subject_id])
   @@map("auth_tokens")
 }
+
+// Phase 1.5 — Client withdrawal requests. The money moves only on APPROVED,
+// in the same transaction as the WITHDRAWAL row and the segregation ledger.
+model WithdrawalRequest {
+  id             String    @id @default(uuid())
+  tenant_id      String
+  account_id     String
+  user_id        String
+  amount_cents   BigInt
+  method         String    @default("")   // bank | card | crypto | ... (free text from the client)
+  destination    String    @default("")   // IBAN / wallet / masked card, as typed by the client
+  status         String    @default("PENDING") // PENDING | APPROVED | REJECTED | CANCELLED
+  reason         String    @default("")   // rejection reason shown to the client
+  requested_at   DateTime  @default(now())
+  decided_at     DateTime?
+  decided_by     String?                  // TenantAdmin id, or the user id for CANCELLED
+  transaction_id String?                  // Transaction created on approval
+
+  @@index([tenant_id, status, requested_at])
+  @@index([tenant_id, user_id])
+  @@map("withdrawal_requests")
+}

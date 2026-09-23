@@ -366,6 +366,9 @@ export async function crmRoutes(fastify: FastifyInstance) {
         status: 'ACTIVE',
         kyc_status: 'NONE',
         lead_id: lead.id,
+        // Phase 1.2: a lead converted by staff has been reached on this
+        // address already (calls/emails); no confirmation loop needed.
+        email_verified_at: new Date(),
       });
       const account = await tq.createAccount(user.id, {
         currency: 'USD',

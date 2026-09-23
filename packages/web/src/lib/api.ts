@@ -163,6 +163,11 @@ export const authApi = {
     apiFetch('/api/v1/admin/password/forgot', { method: 'POST', body: JSON.stringify({ email, tenant_id: tenantId }) }),
   adminResetPassword: (token: string, password: string) =>
     apiFetch('/api/v1/admin/password/reset', { method: 'POST', body: JSON.stringify({ token, password }) }),
+  // Phase 1.2 — email verification
+  verifyEmail: (token: string) =>
+    apiFetch('/api/v1/auth/email/verify', { method: 'POST', body: JSON.stringify({ token }) }),
+  resendVerification: (token: string, tenantId: string) =>
+    apiFetch('/api/v1/auth/email/resend', { method: 'POST', body: '{}', token, tenantId }),
 };
 
 // ─── Trading API ───

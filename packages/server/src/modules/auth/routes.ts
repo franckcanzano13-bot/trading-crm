@@ -4,11 +4,16 @@ import { RegisterSchema, LoginSchema, BCRYPT_SALT_ROUNDS } from '@tradexlabel/sh
 import { tenantResolver } from '../../shared/middleware/tenant-resolver';
 import { requireAuth } from '../../shared/middleware/auth';
 import { serializeBigInt, logger } from '../../shared/utils/index';
+import { issueEmailVerification, tenantRequiresEmailVerification } from './email-verification';
 
 export async function authRoutes(fastify: FastifyInstance) {
   // Register
   fastify.post('/api/v1/auth/register', {
     preHandler: [tenantResolver],
+    config: {
+      // Phase 1.2: registration was unlimited — 5 accounts / hour / IP.
+      rateLimit: { max: 5, timeWindow: '1 hour' },
+    },
   }, async (request, reply) => {
     const parsed = RegisterSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -29,6 +34,13 @@ export async function authRoutes(fastify: FastifyInstance) {
     // Create default trading account
     const account = await tq.createAccount(user.id);
 
+    // Phase 1.2: confirmation email (24 h link). Trading stays locked until
+    // the address is confirmed, unless the broker opted out in tenant.config.
+    const verificationRequired = tenantRequiresEmailVerification(request.tenantConfig);
+    if (verificationRequired) {
+      await issueEmailVerification({ tenantId: request.tenantId!, userId: user.id, email: user.email, name: user.name, ip: request.ip });
+    }
+
     const token = fastify.jwt.sign(
       { sub: user.id, email: user.email, role: 'trader', tenantId: request.tenantId },
       { expiresIn: '4h' }
@@ -46,6 +58,7 @@ export async function authRoutes(fastify: FastifyInstance) {
         account: serializeBigInt(account),
         token,
         refreshToken,
+        email_verification_required: verificationRequired,
       },
     });
   });
@@ -133,6 +146,7 @@ export async function authRoutes(fastify: FastifyInstance) {
 
     return reply.send({
       data: {
+        email_verified: !!user.email_verified_at, // Phase 1.2
         user: { id: user.id, email: user.email, name: user.name, status: user.status, kyc_status: user.kyc_status },
         account: serializeBigInt(account),
         execution_mode: request.tenantExecutionMode || 'B_BOOK',

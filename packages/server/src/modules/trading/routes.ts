@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { CreateOrderSchema } from '@tradexlabel/shared';
 import { tenantResolver } from '../../shared/middleware/tenant-resolver';
 import { requireAuth } from '../../shared/middleware/auth';
+import { requireVerifiedEmail } from '../auth/email-verification';
 import { serializeBigInt, logger, priceToInt, calculateMarginCents, calculatePnlCents } from '../../shared/utils/index';
 import { executeOrder } from './engine';
 import { prisma } from '../../shared/database/prisma';
@@ -37,7 +38,7 @@ const CreateOcoSchema = z.object({
 export async function tradingRoutes(fastify: FastifyInstance) {
   // Place an order
   fastify.post('/api/v1/orders', {
-    preHandler: [tenantResolver, requireAuth],
+    preHandler: [tenantResolver, requireAuth, requireVerifiedEmail],
   }, async (request, reply) => {
     const parsed = CreateOrderSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -335,7 +336,7 @@ export async function tradingRoutes(fastify: FastifyInstance) {
 
   // Sprint 5.4: create an OCO pair — two PENDING orders sharing oco_group_id.
   fastify.post('/api/v1/orders/oco', {
-    preHandler: [tenantResolver, requireAuth],
+    preHandler: [tenantResolver, requireAuth, requireVerifiedEmail],
   }, async (request, reply) => {
     const parsed = CreateOcoSchema.safeParse(request.body);
     if (!parsed.success) {

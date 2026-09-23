@@ -37,6 +37,7 @@ import { timingSafeEqual } from 'crypto';
 // Route imports
 import { authRoutes } from './modules/auth/routes';
 import { passwordResetRoutes } from './modules/auth/password-reset';
+import { emailVerificationRoutes } from './modules/auth/email-verification';
 import { instrumentRoutes } from './modules/instruments/routes';
 import { tradingRoutes } from './modules/trading/routes';
 import { accountRoutes } from './modules/accounts/routes';
@@ -239,6 +240,7 @@ async function buildServer() {
   // ─── Routes ───
   await fastify.register(authRoutes);
   await fastify.register(passwordResetRoutes); // Phase 1.1
+  await fastify.register(emailVerificationRoutes); // Phase 1.2
   await fastify.register(instrumentRoutes);
   await fastify.register(tradingRoutes);
   await fastify.register(accountRoutes);

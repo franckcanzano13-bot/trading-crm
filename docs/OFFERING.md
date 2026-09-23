@@ -37,7 +37,7 @@ plan) · **Roadmap** = pas encore livré.
 | Sources de prix | Binance (crypto), Finnhub (forex), TwelveData (indices/commodités), Frankfurter/Yahoo (gratuit), mock de secours ; détection de spikes/gaps | Config (clés API) |
 | Spread markup | Par instrument et par tenant | Config |
 | Historique & P&L | Positions ouvertes avec P&L temps réel, historique des trades, transactions | Inclus |
-| Comptes | Multi-devises (champ `currency`), dépôts via back-office, **demandes de retrait client validées par le staff** (KYC approuvé requis, solde libre re-vérifié à l'approbation, ledger de ségrégation) | Inclus |
+| Comptes | Multi-devises (champ `currency`), **déclarations de dépôt client confirmées par le staff** (montant reçu, référence, ledger), **demandes de retrait client validées par le staff** (KYC approuvé requis, solde libre re-vérifié à l'approbation, ledger de ségrégation) | Inclus |
 | Notifications trader | Margin call, stop-out, ordre exécuté, trade fermé, dépôt, retrait (WebSocket + email) | Inclus |
 
 ## 3. Back-office broker
@@ -103,7 +103,7 @@ Plans seedés, modifiables via `/api/v1/super/plans` :
 | Professional | 299 $ | 500 | 80 | support prioritaire, API |
 | Enterprise | 999 $ | 10 000 | 200 | support 24/7, API, white-label complet, domaine custom |
 
-Souscriptions, factures et paiement sont gérés côté superadmin (`/super/subscriptions`, `/super/invoices`).
+Souscriptions et factures sont gérées côté superadmin (`/super/subscriptions`, `/super/invoices`). **Paiement en ligne par Stripe** (page Facturation du back-office broker : abonnement, changement de plan, portail de paiement, factures) avec suspension automatique du broker après 7 jours d'impayé et réactivation au paiement ; sans Stripe, le superadmin marque les factures payées.
 
 Les plafonds `max_users` / `max_instruments` sont **appliqués** : refus à
 l'inscription et à la conversion CRM au-delà du nombre de clients, refus
@@ -116,7 +116,7 @@ tenant sans abonnement actif n'a pas de plafond (sandbox, démo).
 - Connexion réelle à un liquidity provider (A-Book STP), hedging automatique.
 - 2FA pour les traders (uniquement staff aujourd'hui).
 - Passkeys / WebAuthn pour le staff.
-- Passerelles de paiement (PSP, crypto) : les dépôts sont manuels via back-office.
+- Rails de paiement automatiques (PSP carte, crypto) : aujourd'hui le client déclare son dépôt et le staff le confirme à réception.
 - Provisioning automatique DNS/TLS des domaines personnalisés (la résolution par domaine fonctionne, le certificat et le CNAME restent manuels).
 - Application mobile.
 - Copy trading / signaux.

@@ -63,14 +63,12 @@ Ce qu'un premier client remarquerait le premier jour. Classé par risque.
 
 **Porte de sortie** : un compte trader peut naître, perdre son mot de passe et retirer ses fonds sans intervention manuelle ; un broker peut être servi sur son propre domaine ; une panne à 3 h du matin déclenche une alerte et un runbook.
 
-**État au 23 septembre 2026 — Phase 1 en cours.** Livré en PR, chacune testée sur PostgreSQL :
-- 1.1 mot de passe oublié (traders et staff) — **fusionné**.
-- 1.2 vérification d'email + rate-limit inscription — PR 18.
-- 1.3 quotas de plan appliqués (`max_users`, `max_instruments`) — PR 19.
-- 1.4 résolution du broker par son domaine, page de login sans identifiant à saisir — PR 20.
-- 1.5 demandes de retrait client avec validation staff (le formulaire de retrait était une simulation) — PR 21.
-- Restent : 1.6 à 1.13 (sauvegardes, supervision, logs, runbooks, Playwright en CI, pentest, règle tenant_id, juridique).
-
+**État au 23 septembre 2026 (soir) — Phase 1 livrée sauf le pentest et la relecture juridique.**
+- 1.1 mot de passe oublié, 1.2 vérification d'email + rate-limit inscription, 1.3 quotas de plan, 1.4 domaine white-label, 1.5 demandes de retrait : **fusionnés**.
+- 1.6 sauvegardes (sidecar pg_dump), 1.7 supervision (Prometheus, Grafana, Alertmanager, dérive de ségrégation en métrique et en alerte), 1.8 logs (Loki, Promtail), 1.9 runbooks (6), 1.10 Playwright en CI, 1.12 scan statique tenant_id (8 requêtes corrigées), 1.13 acceptation des CGU + pages légales + brouillons pour le juriste : **fusionnés**.
+- 1.11 pentest externe : **à commander** (prestataire).
+- 1.13 relecture juridique : **à faire par le juriste** sur `docs/legal/`.
+- Reste à exercer sur un vrai hôte : la stack staging complète (Docker, monitoring, sauvegardes) — bloquée par l'absence de VPS.
 
 ---
 
@@ -97,6 +95,16 @@ Cible : **un broker B_BOOK ou B_BOOK_DEALER non soumis à MiFID** (offshore, ou 
 | 2.8 | **SLA écrit** (disponibilité, délai de réponse support, fenêtre de maintenance) et canal de support (email + astreinte). | 0.5 j |
 
 **Porte de sortie** : un broker a signé, paye par carte, a ses clients qui déposent, tradent et retirent sur son domaine, et n'a eu besoin d'aucune intervention en base de données pendant deux semaines.
+
+**État au 23 septembre 2026 — Phase 2 en cours.**
+- 2.1 création de broker atomique avec plan et essai 14 jours (formulaire superadmin) : PR 32.
+- 2.2 facturation Stripe (Checkout, portail, webhook signé et idempotent, factures miroir, suspension après 7 jours d'impayé, réactivation au paiement) : PR 34. Pour l'activer : produits/prix Stripe, `stripe_price_id` sur chaque plan, endpoint webhook, deux secrets.
+- 2.4 kit d'intégration broker : `docs/broker-integration-kit.md`.
+- 2.5 dépôts : moitié indépendante du prestataire livrée (déclaration client, confirmation staff avec montant reçu, ledger) : PR 35. Le rail PSP/crypto (2.5b) branchera la même confirmation.
+- 2.7 lint web en CI : PR 31.
+- 2.8 SLA : `docs/SLA.md` (brouillon pour les contrats).
+- Restent : 2.3 environnement de démo (besoin d'un hôte), 2.5b rails de paiement, 2.6 split des pages monolithiques.
+
 
 ---
 

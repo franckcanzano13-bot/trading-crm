@@ -18,3 +18,5 @@ FIXES_NOTES.md
 
 # Sprint 9.6: embedded PostgreSQL for dev machines without Docker (scripts/dev-postgres.mjs)
 .local/
+# Playwright HTML report (CI uploads it as an artifact)
+playwright-report/

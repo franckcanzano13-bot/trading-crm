@@ -113,6 +113,13 @@ jobs:
       - name: TypeScript typecheck
         run: npx tsc --noEmit
 
+      # Phase 2.7: Next 16 removed `next lint`; flat config in packages/web/
+      # eslint.config.mjs. Errors block. Warnings budget starts at 260 (258
+      # today: 199 `any`, React Compiler rules on the monolithic pages) and
+      # shrinks with the page splits (roadmap 2.6): 260 → 150 → 50 → 0.
+      - name: ESLint (web)
+        run: npx eslint src --max-warnings=260
+
       - name: Next.js build
         env:
           NEXT_PUBLIC_API_URL: 'http://localhost:6500'

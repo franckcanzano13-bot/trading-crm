@@ -91,7 +91,7 @@ export function EmailsTab({
           </div>
         ))}
         {emailTemplates.length === 0 && (
-          <div className="col-span-2 text-center py-12 text-muted-foreground text-sm">No templates yet. Click "Load Defaults" to create starter templates or "New Template" to create your own.</div>
+          <div className="col-span-2 text-center py-12 text-muted-foreground text-sm">No templates yet. Click &quot;Load Defaults&quot; to create starter templates or &quot;New Template&quot; to create your own.</div>
         )}
       </div>
 

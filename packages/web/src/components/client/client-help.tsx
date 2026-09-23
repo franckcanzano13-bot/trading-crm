@@ -118,7 +118,7 @@ export function ClientHelp() {
       {/* Footer */}
       <div className="bg-card border border-border rounded-2xl p-6 text-center">
         <p className="text-sm text-muted-foreground">
-          Can't find what you're looking for?
+          Can&apos;t find what you&apos;re looking for?
         </p>
         <button className="mt-3 px-6 py-2.5 bg-primary text-primary-foreground rounded-xl text-sm font-semibold hover:opacity-90 transition-opacity">
           Contact Support

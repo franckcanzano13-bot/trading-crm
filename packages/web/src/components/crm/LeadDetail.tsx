@@ -403,7 +403,7 @@ export function LeadDetail({ lead, agents, token, tenantId, onClose, onRefresh, 
                   <div className="text-center py-6 text-xs text-muted-foreground">No documents uploaded yet</div>
                 )}
                 {ks === 'NONE' && (
-                  <div className="text-center py-6 text-xs text-muted-foreground">KYC not started. Click "Send KYC" to send verification link.</div>
+                  <div className="text-center py-6 text-xs text-muted-foreground">KYC not started. Click &quot;Send KYC&quot; to send verification link.</div>
                 )}
               </div>
             );

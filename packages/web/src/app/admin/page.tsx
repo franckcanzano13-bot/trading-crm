@@ -4,7 +4,7 @@ import { useResolvedTenant } from '@/hooks/use-resolved-tenant';
 import { adminApi } from '@/lib/api';
 import { formatCurrency, formatTimeAgo } from '@/lib/utils';
 
-type TabKey = 'dashboard' | 'clients' | 'instruments' | 'positions' | 'transactions' | 'withdrawals' | 'billing';
+type TabKey = 'dashboard' | 'clients' | 'instruments' | 'positions' | 'transactions' | 'withdrawals' | 'billing' | 'deposits';
 
 // ─── Deposit Modal ───
 function DepositModal({
@@ -108,6 +108,8 @@ export default function AdminPage() {
   const [withdrawals, setWithdrawals] = useState<any[]>([]); // Phase 1.5
   const [billing, setBilling] = useState<any>(null); // Phase 2.2
   const loadBilling = () => { if (token && tenantId) adminApi.getBilling(token, tenantId).then(setBilling).catch(() => {}); };
+  const [deposits, setDeposits] = useState<any[]>([]); // Phase 2.5a
+  const loadDeposits = () => { if (token && tenantId) adminApi.getDeposits(token, tenantId).then(setDeposits).catch(() => {}); };
   const loadWithdrawals = () => { if (token && tenantId) adminApi.getWithdrawals(token, tenantId).then(setWithdrawals).catch(() => {}); };
   const [tab, setTab] = useState<TabKey>('dashboard');
 
@@ -142,6 +144,7 @@ export default function AdminPage() {
     adminApi.getPositions(token, tenantId).then(setPositions).catch(() => {});
     adminApi.getWithdrawals(token, tenantId).then(setWithdrawals).catch(() => {});
     adminApi.getBilling(token, tenantId).then(setBilling).catch(() => {});
+    adminApi.getDeposits(token, tenantId).then(setDeposits).catch(() => {});
     adminApi.getTransactions(token, tenantId).then(setTransactions).catch(() => {});
   };
 
@@ -319,6 +322,7 @@ export default function AdminPage() {
     { key: 'clients', label: 'Clients', icon: 'M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z' },
     { key: 'instruments', label: 'Instruments', icon: 'M13 7h8m0 0v8m0-8l-8 8-4-4-6 6' },
     { key: 'positions', label: 'Positions', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
+    { key: 'deposits', label: 'Deposits', icon: 'M12 4v16m0 0l-6-6m6 6l6-6' },
     { key: 'withdrawals', label: 'Withdrawals', icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
     { key: 'billing', label: 'Billing', icon: 'M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z' },
     { key: 'transactions', label: 'Transactions', icon: 'M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z' },
@@ -330,6 +334,7 @@ export default function AdminPage() {
     instruments: 'Configure available trading instruments',
     positions: 'All open positions across clients',
     withdrawals: 'Client withdrawal requests awaiting your decision',
+    deposits: 'Deposits declared by clients, to confirm once the money has arrived',
     transactions: 'Deposits and withdrawals history',
     billing: 'Your platform plan, invoices and payment method',
   };
@@ -698,6 +703,56 @@ export default function AdminPage() {
           )}
 
           {/* ════════════════════════════════════════════ TRANSACTIONS ════════════════════════════════════════════ */}
+          {tab === 'deposits' && (
+            <div className="bg-card rounded-xl border border-border overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-secondary/30">
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Client</th>
+                    <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Declared</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Method / reference</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Declared at</th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status</th>
+                    <th className="text-right px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Decision</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {deposits.map((d: any) => (
+                    <tr key={d.id} className="border-b border-border/50 hover:bg-secondary/10 transition-colors">
+                      <td className="px-4 py-3"><div className="font-medium">{d.user?.name || '-'}</div><div className="text-[11px] text-muted-foreground">{d.user?.email}</div></td>
+                      <td className="px-4 py-3 text-right font-mono font-semibold text-green-500">{formatCurrency(Number(d.amount_cents) / 100)}{d.credited_cents && <div className="text-[11px] text-muted-foreground">credited {formatCurrency(Number(d.credited_cents) / 100)}</div>}</td>
+                      <td className="px-4 py-3 text-xs">{d.method}{d.reference ? <div className="text-muted-foreground font-mono">{d.reference}</div> : null}</td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">{new Date(d.declared_at).toLocaleString()}</td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex px-2.5 py-0.5 rounded-full text-[10px] font-semibold ${
+                          d.status === 'CONFIRMED' ? 'bg-green-500/10 text-green-500' :
+                          d.status === 'REJECTED' ? 'bg-red-500/10 text-red-500' :
+                          d.status === 'CANCELLED' ? 'bg-secondary text-muted-foreground' :
+                          'bg-amber-500/10 text-amber-500'
+                        }`}>{d.status}</span>
+                        {d.reason && <div className="text-[11px] text-muted-foreground mt-1">{d.reason}</div>}
+                      </td>
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        {d.status === 'PENDING' && (
+                          <>
+                            <button className="px-3 py-1.5 rounded-lg bg-green-500/10 text-green-500 text-xs font-semibold hover:bg-green-500/20 mr-2"
+                              onClick={() => { const v = window.prompt(`Amount actually received (declared ${formatCurrency(Number(d.amount_cents) / 100)}). Leave as is to confirm the declared amount:`, String(Number(d.amount_cents) / 100)); if (v === null) return; const n = parseFloat(v); if (!(n > 0)) { alert('Invalid amount'); return; } adminApi.confirmDeposit(token, tenantId, d.id, n).then(() => { loadDeposits(); adminApi.getClients(token, tenantId).then(setClients).catch(() => {}); }).catch((e) => alert(e.message)); }}>
+                              Confirm
+                            </button>
+                            <button className="px-3 py-1.5 rounded-lg bg-red-500/10 text-red-500 text-xs font-semibold hover:bg-red-500/20"
+                              onClick={() => { const reason = window.prompt('Reason shown to the client:'); if (reason) adminApi.rejectDeposit(token, tenantId, d.id, reason).then(loadDeposits).catch((e) => alert(e.message)); }}>
+                              Reject
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {deposits.length === 0 && <tr><td colSpan={6} className="text-center py-12 text-muted-foreground">No deposit declarations</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          )}
           {tab === 'withdrawals' && (
             <div className="bg-card rounded-xl border border-border overflow-hidden">
               <table className="w-full text-sm">

@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useAuthStore } from '@/stores/auth-store';
-import { accountApi, withdrawalApi } from '@/lib/api';
+import { accountApi, withdrawalApi, depositApi } from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
 
 const QUICK_AMOUNTS = [100, 250, 500, 1000, 2500, 5000];
@@ -69,15 +69,19 @@ export function ClientDeposit() {
   const [loading, setLoading] = useState(false);
   // Phase 1.5: real withdrawal requests, decided by the broker's staff.
   const [requests, setRequests] = useState<any[]>([]);
+  const [deposits, setDeposits] = useState<any[]>([]); // Phase 2.5a
+  const [reference, setReference] = useState('');
   const loadRequests = () => {
     if (!token || !tenantId) return;
     withdrawalApi.list(token, tenantId).then(setRequests).catch(() => {});
+    depositApi.list(token, tenantId).then(setDeposits).catch(() => {});
   };
 
   useEffect(() => {
     if (!token || !tenantId) return;
     accountApi.getAccount(token, tenantId).then(setAccount).catch(() => {});
     withdrawalApi.list(token, tenantId).then(setRequests).catch(() => {});
+    depositApi.list(token, tenantId).then(setDeposits).catch(() => {});
   }, [token, tenantId]);
 
   const selectedMethod = PAYMENT_METHODS.find((m) => m.id === method);
@@ -97,10 +101,11 @@ export function ClientDeposit() {
         loadRequests();
         accountApi.getAccount(token!, tenantId!).then(setAccount).catch(() => {});
       } else {
-        // Deposits are collected by the broker's payment provider / support desk;
-        // the in-app form only records the intent until a PSP is connected (roadmap 2.5).
-        await new Promise((r) => setTimeout(r, 400));
-        setSuccess(`Deposit of $${numericAmount.toLocaleString()} via ${selectedMethod?.name}: your broker's support desk will send you the payment instructions.`);
+        // Phase 2.5a: declare the deposit; the broker credits the account once the money has arrived.
+        await depositApi.declare(token!, tenantId!, { amount: numericAmount, method, reference });
+        setSuccess(`Deposit of $${numericAmount.toLocaleString()} via ${selectedMethod?.name} declared. Send the funds with the reference shown by your broker; the balance is credited once received.`);
+        setReference('');
+        loadRequests();
       }
       setAmount('');
       setTimeout(() => setSuccess(''), 8000);
@@ -321,6 +326,13 @@ export function ClientDeposit() {
           </div>
         )}
 
+        {tab === 'deposit' && (
+          <div className="bg-card border border-border rounded-2xl card-modern p-5 space-y-2">
+            <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Payment reference (optional)</label>
+            <input value={reference} onChange={(e) => setReference(e.target.value)} placeholder="Bank transfer id, transaction hash…"
+              className="w-full bg-secondary/30 border border-border rounded-xl text-sm px-4 py-3 text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-primary/40" />
+          </div>
+        )}
         {error && (
           <div className="bg-sell/10 border border-sell/20 rounded-xl p-4 text-sm text-sell">{error}</div>
         )}
@@ -391,6 +403,39 @@ export function ClientDeposit() {
           </p>
         </div>
       </form>
+
+      {/* Phase 2.5a: deposit declarations and their status */}
+      {deposits.length > 0 && (
+        <div className="bg-card border border-border rounded-2xl card-modern overflow-hidden">
+          <div className="px-5 py-3 border-b border-border text-xs font-semibold text-muted-foreground uppercase tracking-wider">Deposit declarations</div>
+          <table className="w-full text-sm">
+            <tbody>
+              {deposits.map((d: any) => (
+                <tr key={d.id} className="border-b border-border/50 last:border-0">
+                  <td className="px-5 py-3 text-xs text-muted-foreground">{new Date(d.declared_at).toLocaleString()}</td>
+                  <td className="px-5 py-3 font-mono font-semibold">${(Number(d.amount_cents) / 100).toLocaleString()}{d.credited_cents && Number(d.credited_cents) !== Number(d.amount_cents) ? <span className="text-xs text-muted-foreground"> (credited ${(Number(d.credited_cents) / 100).toLocaleString()})</span> : null}</td>
+                  <td className="px-5 py-3 text-xs">{d.method}{d.reference ? ` · ${d.reference}` : ''}</td>
+                  <td className="px-5 py-3">
+                    <span className={`inline-flex px-2.5 py-0.5 rounded-full text-[10px] font-semibold ${
+                      d.status === 'CONFIRMED' ? 'bg-green-500/10 text-green-500' :
+                      d.status === 'REJECTED' ? 'bg-red-500/10 text-red-500' :
+                      d.status === 'CANCELLED' ? 'bg-secondary text-muted-foreground' :
+                      'bg-amber-500/10 text-amber-500'
+                    }`}>{d.status}</span>
+                    {d.status === 'REJECTED' && d.reason && <div className="text-[11px] text-muted-foreground mt-1">{d.reason}</div>}
+                  </td>
+                  <td className="px-5 py-3 text-right">
+                    {d.status === 'PENDING' && (
+                      <button type="button" className="text-xs text-muted-foreground hover:text-sell transition-colors"
+                        onClick={() => depositApi.cancel(token!, tenantId!, d.id).then(loadRequests).catch(() => {})}>Cancel</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Phase 1.5: withdrawal requests and their status */}
       {requests.length > 0 && (

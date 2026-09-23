@@ -3,8 +3,8 @@ import { z } from 'zod';
 import { prisma } from '../../shared/database/prisma';
 import { tenantResolver } from '../../shared/middleware/tenant-resolver';
 import { requireAdmin } from '../../shared/middleware/auth';
-import { encrypt, decrypt } from '../../shared/crypto';
-import nodemailer from 'nodemailer';
+import { encrypt } from '../../shared/crypto';
+import { getTransporter, wrapEmailHtml } from '../notifications/mailer';
 
 const logger = require('pino')({ name: 'email' });
 
@@ -13,60 +13,8 @@ function replaceVariables(template: string, vars: Record<string, string>): strin
   return template.replace(/\{\{(\w+)\}\}/g, (match, key) => vars[key] || match);
 }
 
-// ─── Get SMTP transporter for tenant ───
-async function getTransporter(tenantId: string) {
-  const config = await prisma.brokerConfig.findUnique({ where: { tenant_id: tenantId } });
-  if (!config || !config.smtp_host) return null;
-  // Sprint 2.4: smtp_pass stored encrypted — decrypt before use
-  const smtpPass = decrypt(config.smtp_pass || '');
-  return {
-    transporter: nodemailer.createTransport({
-      host: config.smtp_host,
-      port: config.smtp_port,
-      secure: config.smtp_secure,
-      auth: { user: config.smtp_user, pass: smtpPass },
-    }),
-    from: `"${config.smtp_from_name || config.company_name}" <${config.smtp_from_email || config.smtp_user}>`,
-    config,
-  };
-}
-
-// ─── Build default email wrapper with broker branding ───
-type BrandingConfig = {
-  logo_url?: string;
-  company_name?: string;
-  primary_color?: string;
-  address?: string;
-  support_email?: string;
-  support_phone?: string;
-  website?: string;
-};
-function wrapEmailHtml(bodyHtml: string, config: BrandingConfig | null | undefined): string {
-  const logo = config?.logo_url ? `<img src="${config.logo_url}" alt="${config.company_name}" style="max-height:50px;margin-bottom:20px;" />` : '';
-  const color = config?.primary_color || '#6366f1';
-  return `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><style>
-body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f8f9fa;color:#1a1a2e;}
-.container{max-width:600px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.06);}
-.header{background:${color};padding:30px 40px;text-align:center;}
-.header img{display:block;margin:0 auto;}
-.body{padding:32px 40px;line-height:1.7;font-size:15px;}
-.footer{padding:24px 40px;background:#f8f9fa;text-align:center;font-size:12px;color:#8b8b9e;border-top:1px solid #eee;}
-.btn{display:inline-block;padding:12px 28px;background:${color};color:#fff;text-decoration:none;border-radius:8px;font-weight:600;margin:16px 0;}
-h1,h2{color:#1a1a2e;margin-top:0;}
-</style></head>
-<body><div class="container">
-<div class="header">${logo}</div>
-<div class="body">${bodyHtml}</div>
-<div class="footer">
-${config?.company_name || ''}<br/>
-${config?.address || ''}<br/>
-${config?.support_email ? `<a href="mailto:${config.support_email}">${config.support_email}</a>` : ''}
-${config?.support_phone ? ` · ${config.support_phone}` : ''}
-${config?.website ? `<br/><a href="${config.website}">${config.website}</a>` : ''}
-</div>
-</div></body></html>`;
-}
+// Phase 1.1: SMTP transporter + branded wrapper moved to notifications/mailer.ts
+// so password reset and other transactional emails share them.
 
 export async function emailRoutes(fastify: FastifyInstance) {
   const auth = [tenantResolver, requireAdmin];

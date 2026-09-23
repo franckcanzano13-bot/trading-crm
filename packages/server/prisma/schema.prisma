@@ -649,3 +649,23 @@ model CrmTask {
   @@index([tenant_id, status])
   @@map("crm_tasks")
 }
+
+// Phase 1.1 / 1.2 — Single-use, hashed, expiring tokens handed out by email.
+// purpose: PASSWORD_RESET | EMAIL_VERIFY. subject_type: USER | ADMIN.
+// Only the SHA-256 of the token is stored; the raw token travels once in the
+// email link. 30 min TTL for resets, 24 h for email verification.
+model AuthToken {
+  id           String    @id @default(uuid())
+  tenant_id    String
+  purpose      String                      // PASSWORD_RESET | EMAIL_VERIFY
+  subject_type String                      // USER | ADMIN
+  subject_id   String
+  token_hash   String    @unique
+  expires_at   DateTime
+  used_at      DateTime?
+  request_ip   String    @default("")
+  created_at   DateTime  @default(now())
+
+  @@index([tenant_id, purpose, subject_type, subject_id])
+  @@map("auth_tokens")
+}

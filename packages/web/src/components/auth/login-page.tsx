@@ -5,8 +5,8 @@ import { authApi } from '@/lib/api';
 
 export function LoginPage() {
   const [mode, setMode] = useState<'login' | 'register'>('login');
-  const [email, setEmail] = useState('trader@demo.com');
-  const [password, setPassword] = useState('trader123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [tenantId, setTenantId] = useState('');
   const [loading, setLoading] = useState(false);
@@ -190,7 +190,14 @@ export function LoginPage() {
             </button>
           </form>
 
-          <div className="mt-6 text-center">
+          <div className="mt-6 text-center space-y-2">
+            {mode === 'login' && (
+              <div>
+                <a href={`/forgot-password?type=user${tenantId ? `&tenant=${tenantId}` : ''}`} className="text-xs text-muted-foreground hover:text-primary transition-colors">
+                  Forgot your password?
+                </a>
+              </div>
+            )}
             <button
               type="button"
               onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}

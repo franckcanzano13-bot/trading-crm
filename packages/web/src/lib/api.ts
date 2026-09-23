@@ -152,6 +152,17 @@ export const authApi = {
 
   refresh: (token: string) =>
     apiFetch('/api/v1/auth/refresh', { method: 'POST', token }),
+
+  // Phase 1.1 — password reset (trader)
+  forgotPassword: (tenantId: string, email: string) =>
+    apiFetch('/api/v1/auth/password/forgot', { method: 'POST', body: JSON.stringify({ email }), tenantId }),
+  resetPassword: (token: string, password: string) =>
+    apiFetch('/api/v1/auth/password/reset', { method: 'POST', body: JSON.stringify({ token, password }) }),
+  // Phase 1.1 — password reset (broker staff)
+  adminForgotPassword: (tenantId: string, email: string) =>
+    apiFetch('/api/v1/admin/password/forgot', { method: 'POST', body: JSON.stringify({ email, tenant_id: tenantId }) }),
+  adminResetPassword: (token: string, password: string) =>
+    apiFetch('/api/v1/admin/password/reset', { method: 'POST', body: JSON.stringify({ token, password }) }),
 };
 
 // ─── Trading API ───

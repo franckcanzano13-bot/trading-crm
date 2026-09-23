@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { detachSocket, isPermanentUpgradeFailure } from './ws-utils';
 import WebSocket from 'ws';
 import { logger } from '../../shared/utils/index';
 import type { PriceTick } from '@tradexlabel/shared';
@@ -45,6 +46,7 @@ export class FinnhubConnector extends EventEmitter {
   private apiKey: string;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
+  private givenUp = false; // permanent upgrade failure (451/403): stop retrying
   private maxReconnectAttempts = 10;
   private connected = false;
   private lastTickTime = 0;
@@ -67,21 +69,41 @@ export class FinnhubConnector extends EventEmitter {
     this.connected = false;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.ws) {
-      this.ws.removeAllListeners();
-      this.ws.close();
+      detachSocket(this.ws);
       this.ws = null;
     }
     logger.info('[Finnhub] Connector stopped');
   }
 
   private connect() {
-    if (this.ws) {
-      this.ws.removeAllListeners();
-      this.ws.close();
-    }
+    // Abandon the previous socket without leaving it listener-less: a late
+    // 'error' on an orphaned socket would otherwise be thrown and kill the
+    // process (CI finding: Binance HTTP 451 geo-block).
+    if (this.ws) detachSocket(this.ws);
 
     const url = `wss://ws.finnhub.io?token=${this.apiKey}`;
     this.ws = new WebSocket(url);
+
+    // Upgrade refused with an HTTP status (e.g. 451 geo-block, 403). Handling
+    // 'unexpected-response' ourselves keeps ws from emitting a synthetic
+    // error; permanent statuses give up cleanly, the price engine falls back.
+    this.ws.on('unexpected-response', (_req, res) => {
+      const status = res.statusCode;
+      logger.error({ status }, '[%s] WebSocket upgrade refused (HTTP %s)', 'Finnhub', status);
+      this.connected = false;
+      if (isPermanentUpgradeFailure(status)) {
+        logger.warn('[Finnhub] HTTP %s is permanent for this host (geo-block or auth) — not reconnecting; other sources / mock feed take over', status);
+        this.givenUp = true;
+        if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+        detachSocket(this.ws);
+        this.ws = null;
+        this.emit('failed');
+        return;
+      }
+      detachSocket(this.ws);
+      this.ws = null;
+      this.scheduleReconnect();
+    });
 
     this.ws.on('open', () => {
       this.connected = true;
@@ -144,6 +166,7 @@ export class FinnhubConnector extends EventEmitter {
   }
 
   private scheduleReconnect() {
+    if (this.givenUp) return;
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       logger.error('[Finnhub] Max reconnect attempts reached');
       this.emit('failed');

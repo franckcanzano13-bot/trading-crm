@@ -1,4 +1,19 @@
 import 'dotenv/config';
+
+// Phase 0.2 diagnostics: the api container exited with code 1 in CI without a
+// single error line. These handlers write synchronously to stderr so a crash
+// is never lost to buffered logging, whatever the cause.
+process.on('uncaughtException', (err) => {
+  console.error('[process] uncaughtException', err instanceof Error ? err.stack || err.message : err);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[process] unhandledRejection', reason instanceof Error ? reason.stack || reason.message : reason);
+  process.exit(1);
+});
+process.on('exit', (code) => {
+  if (code !== 0) console.error(`[process] exiting with code ${code}`);
+});
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
@@ -315,6 +330,7 @@ async function start() {
     logger.info(`Server running on http://${config.HOST}:${config.PORT}`);
   } catch (err) {
     logger.error(err, 'Failed to start server');
+    console.error('[start] failed:', err instanceof Error ? err.stack || err.message : err);
     process.exit(1);
   }
 }

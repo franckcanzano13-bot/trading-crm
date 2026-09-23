@@ -4,7 +4,7 @@ import { useResolvedTenant } from '@/hooks/use-resolved-tenant';
 import { adminApi } from '@/lib/api';
 import { formatCurrency, formatTimeAgo } from '@/lib/utils';
 
-type TabKey = 'dashboard' | 'clients' | 'instruments' | 'positions' | 'transactions' | 'withdrawals';
+type TabKey = 'dashboard' | 'clients' | 'instruments' | 'positions' | 'transactions' | 'withdrawals' | 'billing';
 
 // ─── Deposit Modal ───
 function DepositModal({
@@ -106,6 +106,8 @@ export default function AdminPage() {
   const [positions, setPositions] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [withdrawals, setWithdrawals] = useState<any[]>([]); // Phase 1.5
+  const [billing, setBilling] = useState<any>(null); // Phase 2.2
+  const loadBilling = () => { if (token && tenantId) adminApi.getBilling(token, tenantId).then(setBilling).catch(() => {}); };
   const loadWithdrawals = () => { if (token && tenantId) adminApi.getWithdrawals(token, tenantId).then(setWithdrawals).catch(() => {}); };
   const [tab, setTab] = useState<TabKey>('dashboard');
 
@@ -139,6 +141,7 @@ export default function AdminPage() {
     adminApi.getInstruments(token, tenantId).then(setInstruments).catch(() => {});
     adminApi.getPositions(token, tenantId).then(setPositions).catch(() => {});
     adminApi.getWithdrawals(token, tenantId).then(setWithdrawals).catch(() => {});
+    adminApi.getBilling(token, tenantId).then(setBilling).catch(() => {});
     adminApi.getTransactions(token, tenantId).then(setTransactions).catch(() => {});
   };
 
@@ -317,6 +320,7 @@ export default function AdminPage() {
     { key: 'instruments', label: 'Instruments', icon: 'M13 7h8m0 0v8m0-8l-8 8-4-4-6 6' },
     { key: 'positions', label: 'Positions', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
     { key: 'withdrawals', label: 'Withdrawals', icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
+    { key: 'billing', label: 'Billing', icon: 'M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z' },
     { key: 'transactions', label: 'Transactions', icon: 'M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z' },
   ];
 
@@ -327,6 +331,7 @@ export default function AdminPage() {
     positions: 'All open positions across clients',
     withdrawals: 'Client withdrawal requests awaiting your decision',
     transactions: 'Deposits and withdrawals history',
+    billing: 'Your platform plan, invoices and payment method',
   };
 
   return (
@@ -748,6 +753,76 @@ export default function AdminPage() {
                   )}
                 </tbody>
               </table>
+            </div>
+          )}
+          {tab === 'billing' && (
+            <div className="space-y-6">
+              <div className="bg-card rounded-xl border border-border p-6">
+                {!billing ? <div className="text-muted-foreground text-sm">Loading…</div> : (
+                  <>
+                    <div className="flex items-start justify-between gap-6">
+                      <div>
+                        <div className="text-xs text-muted-foreground uppercase tracking-wider">Current plan</div>
+                        <div className="text-2xl font-bold mt-1">{billing.subscription?.plan?.name || 'No plan'}</div>
+                        {billing.subscription && (
+                          <div className="text-sm text-muted-foreground mt-1">
+                            {formatCurrency(billing.subscription.plan.price_cents / 100)} / month ·{' '}
+                            <span className={billing.subscription.status === 'PAST_DUE' ? 'text-red-500 font-semibold' : billing.subscription.status === 'TRIAL' ? 'text-amber-500' : 'text-green-500'}>{billing.subscription.status}</span>
+                            {billing.subscription.trial_ends_at && ` · trial ends ${new Date(billing.subscription.trial_ends_at).toLocaleDateString()}`}
+                            {billing.subscription.past_due_since && ` · payment failing since ${new Date(billing.subscription.past_due_since).toLocaleDateString()} (suspension after ${billing.grace_days} days)`}
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex gap-2">
+                        {billing.billing_enabled && billing.subscription?.managed_by_stripe && (
+                          <button className="px-4 py-2 rounded-lg bg-secondary text-sm font-semibold hover:bg-secondary/70"
+                            onClick={() => adminApi.openBillingPortal(token, tenantId).then((d: any) => { window.location.href = d.url; }).catch((e) => alert(e.message))}>
+                            Manage payment method
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {!billing.billing_enabled && (
+                      <div className="mt-4 text-xs text-muted-foreground bg-secondary/40 rounded-lg px-3 py-2">Online payment is not enabled on this platform; invoices are settled with your account manager.</div>
+                    )}
+                  </>
+                )}
+              </div>
+
+              {billing?.billing_enabled && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {billing.plans.filter((p: any) => p.purchasable).map((p: any) => (
+                    <div key={p.id} className={`bg-card rounded-xl border p-5 ${billing.subscription?.plan?.id === p.id ? 'border-primary' : 'border-border'}`}>
+                      <div className="font-semibold">{p.name}</div>
+                      <div className="text-2xl font-bold mt-1">{formatCurrency(p.price_cents / 100)}<span className="text-xs text-muted-foreground font-normal"> / month</span></div>
+                      <div className="text-xs text-muted-foreground mt-2">{p.max_users} clients · {p.max_instruments} instruments</div>
+                      {p.description && <div className="text-xs text-muted-foreground mt-1">{p.description}</div>}
+                      <button className="mt-4 w-full px-3 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-semibold hover:opacity-90 disabled:opacity-40"
+                        disabled={billing.subscription?.plan?.id === p.id && billing.subscription?.status === 'ACTIVE'}
+                        onClick={() => adminApi.startCheckout(token, tenantId, p.id).then((d: any) => { window.location.href = d.url; }).catch((e) => alert(e.message))}>
+                        {billing.subscription?.plan?.id === p.id && billing.subscription?.status === 'ACTIVE' ? 'Current plan' : billing.subscription ? 'Switch to this plan' : 'Subscribe'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="bg-card rounded-xl border border-border overflow-hidden">
+                <div className="px-4 py-3 border-b border-border text-xs font-semibold text-muted-foreground uppercase tracking-wider">Invoices</div>
+                <table className="w-full text-sm">
+                  <tbody>
+                    {(billing?.invoices || []).map((inv: any) => (
+                      <tr key={inv.id} className="border-b border-border/50 last:border-0">
+                        <td className="px-4 py-3 text-xs text-muted-foreground">{new Date(inv.period_start).toLocaleDateString()} → {new Date(inv.period_end).toLocaleDateString()}</td>
+                        <td className="px-4 py-3 font-mono font-semibold">{formatCurrency(inv.amount_cents / 100)}</td>
+                        <td className="px-4 py-3"><span className={`inline-flex px-2.5 py-0.5 rounded-full text-[10px] font-semibold ${inv.status === 'PAID' ? 'bg-green-500/10 text-green-500' : inv.status === 'OVERDUE' ? 'bg-red-500/10 text-red-500' : 'bg-amber-500/10 text-amber-500'}`}>{inv.status}</span></td>
+                        <td className="px-4 py-3 text-right">{inv.hosted_invoice_url && <a href={inv.hosted_invoice_url} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">View</a>}</td>
+                      </tr>
+                    ))}
+                    {(!billing || billing.invoices.length === 0) && <tr><td className="text-center py-8 text-muted-foreground" colSpan={4}>No invoices yet</td></tr>}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
           {tab === 'transactions' && (

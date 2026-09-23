@@ -218,6 +218,13 @@ export const withdrawalApi = {
 
 // ─── Admin API ───
 export const adminApi = {
+  // Phase 2.2 — billing
+  getBilling: (token: string, tenantId: string) =>
+    apiFetch('/api/v1/admin/billing', { token, tenantId }),
+  startCheckout: (token: string, tenantId: string, planId: string) =>
+    apiFetch('/api/v1/admin/billing/checkout', { method: 'POST', body: JSON.stringify({ plan_id: planId }), token, tenantId }),
+  openBillingPortal: (token: string, tenantId: string) =>
+    apiFetch('/api/v1/admin/billing/portal', { method: 'POST', body: '{}', token, tenantId }),
   // Phase 1.5 — withdrawal decisions
   getWithdrawals: (token: string, tenantId: string, status?: string) =>
     apiFetch(`/api/v1/admin/withdrawals${status ? `?status=${status}` : ''}`, { token, tenantId }),

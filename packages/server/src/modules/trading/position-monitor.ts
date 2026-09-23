@@ -39,6 +39,18 @@ export function stopPositionMonitor() {
   }
 }
 
+// Phase 2.2: suspend tenants whose subscription is past due beyond the grace
+// period. Cheap query; once an hour is plenty.
+let lastBillingCheck = 0;
+async function billingTick() {
+  if (Date.now() - lastBillingCheck < 3_600_000) return;
+  lastBillingCheck = Date.now();
+  // Dynamic import: billing pulls in the validated config (JWT secrets, ...);
+  // unit tests that exercise the monitor helpers must not load it at import time.
+  const { enforceBillingGrace } = await import('../billing/routes');
+  await enforceBillingGrace();
+}
+
 async function monitorLoop() {
   try {
     await Promise.all([
@@ -47,6 +59,7 @@ async function monitorLoop() {
       checkPendingOrders(),
       checkMarginCalls(),
       checkDealerPnlTargets(),
+      billingTick(),
     ]);
   } catch (err) {
     // Don't crash the loop on errors

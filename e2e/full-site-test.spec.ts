@@ -1,7 +1,8 @@
 import { test, expect, Page } from '@playwright/test';
 
-const BASE = 'http://localhost:3002';
-const TENANT_ID = '944dc16d-ede5-4dff-81f5-839285b3229a';
+// Phase 1.10: CI passes these from the seeded database; local runs can keep the defaults.
+const BASE = process.env.E2E_BASE_URL || 'http://localhost:3002';
+const TENANT_ID = process.env.E2E_TENANT_ID || '944dc16d-ede5-4dff-81f5-839285b3229a';
 const EMAIL = 'trader@demo.com';
 const PASSWORD = 'trader123';
 
@@ -342,7 +343,8 @@ test.describe('Full Site E2E Test', () => {
     // Try logging in
     const tenantInput = page.locator('input[placeholder="Broker UUID"]');
     if (await tenantInput.isVisible()) {
-      await tenantInput.fill(TENANT_ID);
+      // The seeded dealer admin (admin@dealer.com) belongs to the dealer tenant.
+      await tenantInput.fill(process.env.E2E_DEALER_TENANT_ID || TENANT_ID);
 
       const emailInput = page.locator('input[type="email"]');
       await emailInput.fill('admin@dealer.com');

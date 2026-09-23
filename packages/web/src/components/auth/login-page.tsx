@@ -11,6 +11,8 @@ export function LoginPage() {
   const [tenantId, setTenantId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // Phase 1.2: after registering, hold the session until the user has read the confirmation notice.
+  const [pendingLogin, setPendingLogin] = useState<null | (() => void)>(null);
   const login = useAuthStore((s) => s.login);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -28,7 +30,8 @@ export function LoginPage() {
         login({ token: data.token, refreshToken: data.refreshToken, user: data.user, tenantId, execution_mode: data.execution_mode });
       } else {
         const data = await authApi.register(tenantId, { email, password, name });
-        login({ token: data.token, refreshToken: data.refreshToken, user: data.user, tenantId, execution_mode: data.execution_mode });
+        const enter = () => login({ token: data.token, refreshToken: data.refreshToken, user: data.user, tenantId, execution_mode: data.execution_mode });
+        if (data.email_verification_required) setPendingLogin(() => enter); else enter();
       }
     } catch (err: any) {
       setError(err.message);
@@ -164,6 +167,12 @@ export function LoginPage() {
               />
             </div>
 
+            {pendingLogin && (
+              <div className="text-xs text-foreground bg-primary/10 border border-primary/20 rounded-lg px-3.5 py-3 space-y-2">
+                <div>Account created. We sent a confirmation link to <span className="font-medium">{email}</span>. You can explore the platform now; trading unlocks once your email is confirmed.</div>
+                <button type="button" onClick={pendingLogin} className="text-xs font-semibold text-primary hover:underline">Continue to the terminal</button>
+              </div>
+            )}
             {error && (
               <div className="text-xs text-sell bg-sell/10 border border-sell/20 rounded-lg px-3.5 py-2.5 flex items-center gap-2">
                 <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">

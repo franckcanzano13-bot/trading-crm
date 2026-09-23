@@ -37,6 +37,7 @@ export class TenantQuery {
     status?: string;
     kyc_status?: string;
     lead_id?: string | null;
+    email_verified_at?: Date | null;
   }) {
     return this.db.user.create({
       data: { ...data, tenant_id: this.tenantId },
@@ -47,7 +48,7 @@ export class TenantQuery {
     return this.db.user.findMany({
       where: { tenant_id: this.tenantId },
       select: {
-        id: true, email: true, name: true, status: true, kyc_status: true, created_at: true,
+        id: true, email: true, name: true, status: true, kyc_status: true, email_verified_at: true, created_at: true,
         accounts: { select: { id: true, balance: true, equity: true, margin_used: true, leverage: true } },
       },
       orderBy: { created_at: 'desc' },
@@ -56,7 +57,7 @@ export class TenantQuery {
     });
   }
 
-  async updateUser(id: string, data: { status?: string; kyc_status?: string; name?: string }) {
+  async updateUser(id: string, data: { status?: string; kyc_status?: string; name?: string; email_verified?: boolean }) {
     // VULN tenant_id filter: ensure update is scoped to current tenant
     const result = await this.db.user.updateMany({
       where: { id, tenant_id: this.tenantId },
@@ -64,6 +65,8 @@ export class TenantQuery {
         ...(data.status && { status: data.status }),
         ...(data.kyc_status && { kyc_status: data.kyc_status }),
         ...(data.name && { name: data.name }),
+        // Phase 1.2: staff can confirm (or un-confirm) an address manually
+        ...(data.email_verified !== undefined && { email_verified_at: data.email_verified ? new Date() : null }),
       },
     });
     if (result.count === 0) return null;

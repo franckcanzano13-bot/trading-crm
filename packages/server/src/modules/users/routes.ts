@@ -11,6 +11,7 @@ const UpdateClientSchema = z.object({
   status: z.enum(['ACTIVE', 'INACTIVE', 'BLOCKED']).optional(),
   kyc_status: z.enum(['NONE', 'PENDING', 'APPROVED', 'REJECTED']).optional(),
   name: z.string().min(1).optional(),
+  email_verified: z.boolean().optional(), // Phase 1.2: manual confirmation by staff
 });
 
 export async function adminClientRoutes(fastify: FastifyInstance) {
@@ -37,10 +38,10 @@ export async function adminClientRoutes(fastify: FastifyInstance) {
       return reply.status(404).send({ error: 'User not found', code: 'USER_NOT_FOUND' });
     }
     // Sprint 2.3: audit KYC and status changes (regulatory)
-    if (parsed.data.kyc_status || parsed.data.status) {
+    if (parsed.data.kyc_status || parsed.data.status || parsed.data.email_verified !== undefined) {
       await audit.log({
         tenantId: request.tenantId!, actorId: request.userData!.sub, actorType: 'admin',
-        action: parsed.data.kyc_status ? 'KYC_UPDATE' : 'CLIENT_STATUS_UPDATE',
+        action: parsed.data.kyc_status ? 'KYC_UPDATE' : parsed.data.status ? 'CLIENT_STATUS_UPDATE' : 'CLIENT_EMAIL_VERIFIED_UPDATE',
         target: `user:${request.params.id}`,
         details: parsed.data,
         ip: request.ip,

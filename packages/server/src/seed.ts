@@ -113,6 +113,7 @@ async function seed() {
         email: 'trader@demo.com',
         password_hash: traderPw,
         name: 'Demo Trader',
+        email_verified_at: new Date(), // Phase 1.2: demo account is pre-confirmed
       });
       const depositAmount = BigInt(1000000); // $10,000 in cents
       // Sprint 8.4: seed the demo balance through the segregation ledger so a

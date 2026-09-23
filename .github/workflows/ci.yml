@@ -194,3 +194,90 @@ jobs:
           if ! curl -fsS -o /dev/null -w "web / -> %{http_code}\n" http://127.0.0.1:3000/; then
             echo "::error::web container did not answer"; docker logs ci-web 2>&1 | tail -60; exit 1
           fi
+
+  # Phase 1.10 — Playwright end-to-end against a real api + web + seeded
+  # PostgreSQL, without Docker (faster than rebuilding the images here).
+  # Not a required check yet: promote it in branch protection once it has
+  # been green for a week.
+  e2e:
+    name: E2E (Playwright, seeded stack)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tradexlabel
+          POSTGRES_PASSWORD: ci_test
+          POSTGRES_DB: tradexlabel_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tradexlabel"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: 'postgresql://tradexlabel:ci_test@localhost:5432/tradexlabel_e2e'
+      JWT_SECRET: 'ci-test-jwt-secret-must-be-long-enough'
+      JWT_REFRESH_SECRET: 'ci-test-refresh-secret-must-be-long-enough'
+      ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+      METRICS_AUTH_TOKEN: 'ci-metrics'
+      CORS_ALLOWED_ORIGINS: 'http://localhost:3000'
+      ENABLE_DEALER_MODULE: '1'
+      PORT: '5500'
+      HOST: '127.0.0.1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - name: Install deps
+        run: npm ci
+      - name: Build shared + server, generate Prisma client
+        run: |
+          npm run build --workspace=@tradexlabel/shared
+          (cd packages/server && npx prisma generate && npx prisma migrate deploy)
+          npm run build --workspace=@tradexlabel/server
+      - name: Seed demo data and capture tenant ids
+        id: seed
+        working-directory: packages/server
+        run: |
+          npx tsx src/seed.ts | tee seed.log
+          echo "demo=$(grep 'Demo Tenant ID' seed.log | awk '{print $NF}')" >> "$GITHUB_OUTPUT"
+          echo "dealer=$(grep 'Dealer Tenant ID' seed.log | awk '{print $NF}')" >> "$GITHUB_OUTPUT"
+      - name: Start api
+        run: |
+          NODE_ENV=production nohup node packages/server/dist/index.js > api.log 2>&1 &
+          for i in $(seq 1 40); do curl -fsS http://127.0.0.1:5500/api/v1/health >/dev/null 2>&1 && break; sleep 1; done
+          curl -fsS http://127.0.0.1:5500/api/v1/health >/dev/null
+      - name: Build and start web
+        working-directory: packages/web
+        env:
+          NEXT_PUBLIC_API_URL: 'http://localhost:5500'
+        run: |
+          npx next build
+          PORT=3000 nohup npx next start > ../../web.log 2>&1 &
+          for i in $(seq 1 40); do curl -fsS http://127.0.0.1:3000/ >/dev/null 2>&1 && break; sleep 1; done
+          curl -fsS -o /dev/null -w "web -> %{http_code}\n" http://127.0.0.1:3000/
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Run Playwright
+        env:
+          CI: 'true'
+          E2E_BASE_URL: 'http://localhost:3000'
+          E2E_TENANT_ID: ${{ steps.seed.outputs.demo }}
+          E2E_DEALER_TENANT_ID: ${{ steps.seed.outputs.dealer }}
+        run: npx playwright test
+      - name: Upload report and logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-report
+          path: |
+            playwright-report
+            test-results
+            api.log
+            web.log
+          retention-days: 7

@@ -1,7 +1,8 @@
 import { test, expect, Page } from '@playwright/test';
 
-const BASE = 'http://localhost:3002';
-const TENANT_ID = '944dc16d-ede5-4dff-81f5-839285b3229a';
+// Phase 1.10: CI passes these from the seeded database; local runs can keep the defaults.
+const BASE = process.env.E2E_BASE_URL || 'http://localhost:3002';
+const TENANT_ID = process.env.E2E_TENANT_ID || '944dc16d-ede5-4dff-81f5-839285b3229a';
 const EMAIL = 'trader@demo.com';
 const PASSWORD = 'trader123';
 
@@ -41,9 +42,12 @@ test.describe('Full Site E2E Test', () => {
     await page.goto(BASE);
     await page.waitForLoadState('networkidle');
 
-    // Clear broker ID and try to submit
+    // Clear broker ID and try to submit. Email/password are no longer pre-filled
+    // (Sprint 8.1), and they are `required`, so fill them or the browser blocks submit.
     const brokerInput = page.locator('input[placeholder="Enter your broker UUID"]');
     await brokerInput.fill('');
+    await page.locator('input[type="email"]').fill(EMAIL);
+    await page.locator('input[type="password"]').fill(PASSWORD);
     await page.locator('button[type="submit"]').click();
 
     // Should show error
@@ -119,7 +123,7 @@ test.describe('Full Site E2E Test', () => {
     console.log(`  Trading - Sidebar visible: ${sidebarVisible}`);
 
     // Check instruments loaded
-    const instrumentCount = await page.locator('text=instruments').first().textContent().catch(() => '');
+    const instrumentCount = await page.locator('text=instruments').first().textContent({ timeout: 3000 }).catch(() => '');
     console.log(`  Trading - Instruments: ${instrumentCount}`);
 
     // Check chart toolbar
@@ -342,7 +346,8 @@ test.describe('Full Site E2E Test', () => {
     // Try logging in
     const tenantInput = page.locator('input[placeholder="Broker UUID"]');
     if (await tenantInput.isVisible()) {
-      await tenantInput.fill(TENANT_ID);
+      // The seeded dealer admin (admin@dealer.com) belongs to the dealer tenant.
+      await tenantInput.fill(process.env.E2E_DEALER_TENANT_ID || TENANT_ID);
 
       const emailInput = page.locator('input[type="email"]');
       await emailInput.fill('admin@dealer.com');

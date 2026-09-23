@@ -16,6 +16,10 @@ const envSchema = z.object({
   ENCRYPTION_KEY: z.string().optional().default(''),
   // Sprint 4.5: bearer token to access /metrics. Empty = open in dev, denied in prod.
   METRICS_AUTH_TOKEN: z.string().optional().default(''),
+  // Phase 2.2: Stripe billing (optional — without a key, invoices stay manual)
+  STRIPE_SECRET_KEY: z.string().optional().default(''),
+  STRIPE_WEBHOOK_SECRET: z.string().optional().default(''),
+  BILLING_GRACE_DAYS: z.coerce.number().int().min(0).default(7),
 });
 
 function loadConfig() {

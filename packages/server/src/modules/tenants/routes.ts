@@ -261,6 +261,7 @@ export async function tenantRoutes(fastify: FastifyInstance) {
       max_users?: number;
       max_instruments?: number;
       features?: Record<string, unknown>;
+      stripe_price_id?: string; // Phase 2.2
     };
     const plan = await prisma.plan.create({
       data: {
@@ -270,10 +271,36 @@ export async function tenantRoutes(fastify: FastifyInstance) {
         max_users: body.max_users || 100,
         max_instruments: body.max_instruments || 50,
         features: JSON.stringify(body.features || {}),
+        stripe_price_id: body.stripe_price_id || null,
       },
     });
     await auditLog(request, 'CREATE_PLAN', `plan:${plan.id}`, { name: plan.name });
     return reply.status(201).send({ data: plan });
+  });
+
+  // Phase 2.2: superadmin edits a plan (ceilings, price, Stripe price id, active flag)
+  fastify.patch<{ Params: { id: string } }>('/api/v1/super/plans/:id', {
+    preHandler: [requireSuperAdmin],
+  }, async (request, reply) => {
+    const body = (request.body ?? {}) as {
+      name?: string; description?: string; price_cents?: number; max_users?: number; max_instruments?: number;
+      features?: Record<string, unknown>; stripe_price_id?: string | null; is_active?: boolean;
+    };
+    const plan = await prisma.plan.update({
+      where: { id: request.params.id },
+      data: {
+        ...(body.name !== undefined && { name: body.name }),
+        ...(body.description !== undefined && { description: body.description }),
+        ...(body.price_cents !== undefined && { price_cents: body.price_cents }),
+        ...(body.max_users !== undefined && { max_users: body.max_users }),
+        ...(body.max_instruments !== undefined && { max_instruments: body.max_instruments }),
+        ...(body.features !== undefined && { features: JSON.stringify(body.features) }),
+        ...(body.stripe_price_id !== undefined && { stripe_price_id: body.stripe_price_id || null }),
+        ...(body.is_active !== undefined && { is_active: body.is_active }),
+      },
+    });
+    await auditLog(request, 'UPDATE_PLAN', `plan:${plan.id}`, { changes: body });
+    return reply.send({ data: plan });
   });
 
   // ─── Subscriptions ───

@@ -108,6 +108,9 @@ services:
       TWELVEDATA_API_KEY: ${TWELVEDATA_API_KEY:-}
       KYC_API_URL: ${KYC_API_URL:-}
       KYC_API_KEY: ${KYC_API_KEY:-}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      BILLING_GRACE_DAYS: ${BILLING_GRACE_DAYS:-7}
     labels:
       - traefik.enable=true
       - traefik.http.routers.api.rule=Host(`api.${STAGING_DOMAIN}`)

@@ -261,6 +261,7 @@ model Plan {
   max_users     Int      @default(100)
   max_instruments Int    @default(50)
   features      String   @default("{}") // JSON features list
+  stripe_price_id String?                 // Phase 2.2: Stripe Price id for online checkout
   is_active     Boolean  @default(true)
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt
@@ -274,7 +275,10 @@ model Subscription {
   id            String   @id @default(uuid())
   tenant_id     String
   plan_id       String
-  status        String   @default("ACTIVE") // ACTIVE, CANCELLED, EXPIRED, TRIAL
+  status        String   @default("ACTIVE") // ACTIVE, CANCELLED, EXPIRED, TRIAL, PAST_DUE
+  stripe_subscription_id String? @unique  // Phase 2.2
+  stripe_customer_id     String?          // Phase 2.2
+  past_due_since         DateTime?        // Phase 2.2: first failed payment; grace period runs from here
   starts_at     DateTime @default(now())
   ends_at       DateTime?
   trial_ends_at DateTime?
@@ -296,6 +300,8 @@ model Invoice {
   period_start    DateTime
   period_end      DateTime
   paid_at         DateTime?
+  stripe_invoice_id String? @unique       // Phase 2.2
+  hosted_invoice_url String @default("") // Phase 2.2: Stripe-hosted PDF/pay page
   created_at      DateTime @default(now())
 
   subscription Subscription @relation(fields: [subscription_id], references: [id])

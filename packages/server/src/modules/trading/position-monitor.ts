@@ -21,6 +21,10 @@ const STOP_OUT_LEVEL = 50; // 50% margin level = liquidation
 
 let intervalHandle: NodeJS.Timeout | null = null;
 
+// Phase 1.7: last completed loop, exposed to /metrics (0 = never ran here).
+let lastRunAt = 0;
+export function getPositionMonitorLastRun(): number { return lastRunAt; }
+
 export function startPositionMonitor() {
   if (intervalHandle) return;
   logger.info('[PositionMonitor] Starting — SL/TP, limit/stop matching, margin call');
@@ -47,6 +51,8 @@ async function monitorLoop() {
   } catch (err) {
     // Don't crash the loop on errors
     logger.error({ err }, '[PositionMonitor] Error in monitoring loop');
+  } finally {
+    lastRunAt = Date.now();
   }
 }
 

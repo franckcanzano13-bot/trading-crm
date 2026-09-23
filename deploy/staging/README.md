@@ -43,7 +43,7 @@ The API resolves the tenant from `X-Forwarded-Host`.
 ```bash
 sudo mkdir -p /opt/tradexlabel && sudo chown deploy:deploy /opt/tradexlabel
 # from the repo, on your machine:
-scp deploy/staging/docker-compose.yml deploy/staging/deploy.sh deploy/staging/.env.example \
+scp -r deploy/staging/docker-compose.yml deploy/staging/deploy.sh deploy/staging/.env.example deploy/staging/monitoring \
     scripts/smoke-api.mjs deploy@<host>:/opt/tradexlabel/
 ssh deploy@<host> 'cd /opt/tradexlabel && cp .env.example .env && chmod 600 .env && chmod +x deploy.sh'
 ```
@@ -94,3 +94,15 @@ Copy the two tenant ids the seed prints into `/opt/tradexlabel/.env` (`SMOKE_TEN
 | API docs | `https://api.<domain>/api/docs` (EXPOSE_API_DOCS=1 on staging only) |
 
 Backups are manual on staging. Production uses a managed Postgres with point-in-time recovery (roadmap Phase 1.6).
+
+## 7. Monitoring (Phase 1.7)
+
+Add a third A record, `grafana.<domain>`, and set `GRAFANA_ADMIN_PASSWORD` and
+`ALERT_WEBHOOK_URL` in `.env`. `deploy.sh` writes `monitoring/metrics_token`
+from `METRICS_AUTH_TOKEN` so Prometheus can scrape every api replica.
+
+- Grafana: `https://grafana.<domain>` — dashboard "TradeXLabel — Overview" is provisioned.
+- Prometheus and Alertmanager are internal only (no Traefik route); `docker compose exec prometheus wget -qO- localhost:9090/api/v1/alerts` to inspect.
+- Alerts (`monitoring/alerts.yml`): API down, 5xx > 2%, order p95 > 1s, position monitor stale, **segregation drift ≠ 0**, price source down or silent. Each carries the runbook to open.
+
+Not yet covered: the position-monitor worker has no /metrics endpoint of its own; `PositionMonitorStale` only fires when the monitor runs inside the api process (RUN_AS_API_ONLY unset). Roadmap item.

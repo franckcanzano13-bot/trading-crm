@@ -25,6 +25,7 @@ import websocket from '@fastify/websocket';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import { registry, httpRequestsTotal, httpRequestDuration } from './shared/metrics';
+import './shared/metrics/runtime'; // Phase 1.7: drift / price source / monitor gauges
 import { config } from './config/index';
 import { logger } from './shared/utils/index';
 import { prisma } from './shared/database/prisma';

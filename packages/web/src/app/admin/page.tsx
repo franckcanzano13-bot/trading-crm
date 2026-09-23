@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useMemo } from 'react';
+import { useResolvedTenant } from '@/hooks/use-resolved-tenant';
 import { adminApi } from '@/lib/api';
 import { formatCurrency, formatTimeAgo } from '@/lib/utils';
 
@@ -92,7 +93,7 @@ function DepositModal({
 // ─── Main Component ───
 export default function AdminPage() {
   const [token, setToken] = useState('');
-  const [tenantId, setTenantId] = useState('');
+  const { tenantId, setTenantId, tenant: resolvedTenant } = useResolvedTenant(); // Phase 1.4
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');

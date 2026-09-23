@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useState, useRef, Component, type ReactNode } from 'react';
+import { useResolvedTenant } from '@/hooks/use-resolved-tenant';
 import { crmApi, adminApi } from '@/lib/api';
 import { useThemeStore } from '@/stores/theme-store';
 import { t, getLang, setLang, type Lang } from '@/lib/i18n';
@@ -50,7 +51,7 @@ class CRMErrorBoundary extends Component<{ children: ReactNode }, { error: Error
 function LoginPanel({ onLogin }: { onLogin: (token: string, tenantId: string, admin: any) => void }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [tenantId, setTenantId] = useState('');
+  const { tenantId, setTenantId, tenant: resolvedTenant } = useResolvedTenant(); // Phase 1.4
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const theme = useThemeStore((s) => s.theme);
@@ -168,7 +169,7 @@ function CRMPageInner() {
   const changeLang = (l: Lang) => { setLangState(l); setLang(l); };
   const T = (key: string) => t(key, lang);
   const [token, setToken] = useState('');
-  const [tenantId, setTenantId] = useState('');
+  const { tenantId, setTenantId, tenant: resolvedTenant } = useResolvedTenant(); // Phase 1.4
   const [admin, setAdmin] = useState<any>(null);
   const [tab, setTab] = useState<'dashboard' | 'pipeline' | 'leads' | 'tasks' | 'affiliates' | 'retention' | 'emails' | 'reports'>('dashboard');
   const [department, setDepartment] = useState<'ALL' | 'SELLER' | 'RETENTION'>('ALL');

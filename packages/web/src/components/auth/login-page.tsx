@@ -1,5 +1,6 @@
 'use client';
 import { useState } from 'react';
+import { useResolvedTenant } from '@/hooks/use-resolved-tenant';
 import { useAuthStore } from '@/stores/auth-store';
 import { authApi } from '@/lib/api';
 
@@ -8,7 +9,7 @@ export function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  const [tenantId, setTenantId] = useState('');
+  const { tenantId, setTenantId, tenant: resolvedTenant } = useResolvedTenant(); // Phase 1.4
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   // Phase 1.2: after registering, hold the session until the user has read the confirmation notice.
@@ -123,15 +124,22 @@ export function LoginPage() {
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="text-xs text-muted-foreground font-medium block mb-1.5">Broker ID</label>
-              <input
-                value={tenantId}
-                onChange={(e) => setTenantId(e.target.value)}
-                placeholder="Enter your broker UUID"
-                className="w-full bg-card border border-border rounded-lg text-sm px-3.5 py-2.5 text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition"
-              />
-            </div>
+            {resolvedTenant ? (
+              // Phase 1.4: served on the broker's own domain — no id to type.
+              <div className="text-xs text-muted-foreground">
+                Signing in to <span className="font-medium text-foreground">{resolvedTenant.branding?.company_name || resolvedTenant.name}</span>
+              </div>
+            ) : (
+              <div>
+                <label className="text-xs text-muted-foreground font-medium block mb-1.5">Broker ID</label>
+                <input
+                  value={tenantId}
+                  onChange={(e) => setTenantId(e.target.value)}
+                  placeholder="Enter your broker UUID"
+                  className="w-full bg-card border border-border rounded-lg text-sm px-3.5 py-2.5 text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/40 transition"
+                />
+              </div>
+            )}
 
             <div>
               <label className="text-xs text-muted-foreground font-medium block mb-1.5">Email</label>

@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import bcrypt from 'bcrypt';
-import { RegisterSchema, LoginSchema, BCRYPT_SALT_ROUNDS } from '@tradexlabel/shared';
+import { RegisterSchema, LoginSchema, BCRYPT_SALT_ROUNDS, TERMS_VERSION } from '@tradexlabel/shared';
 import { tenantResolver } from '../../shared/middleware/tenant-resolver';
 import { requireAuth } from '../../shared/middleware/auth';
 import { serializeBigInt, logger } from '../../shared/utils/index';
@@ -37,7 +37,8 @@ export async function authRoutes(fastify: FastifyInstance) {
     }
 
     const passwordHash = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
-    const user = await tq.createUser({ email, password_hash: passwordHash, name });
+    // Phase 1.13: the schema already refused the request without accept_terms === true.
+    const user = await tq.createUser({ email, password_hash: passwordHash, name, terms_accepted_at: new Date(), terms_version: TERMS_VERSION });
 
     // Create default trading account
     const account = await tq.createAccount(user.id);

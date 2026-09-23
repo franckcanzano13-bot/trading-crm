@@ -77,6 +77,8 @@ model User {
   status        String   @default("ACTIVE")
   kyc_status    String   @default("NONE")
   email_verified_at DateTime?                // Phase 1.2: null = not confirmed yet
+  terms_accepted_at DateTime?                // Phase 1.13: when the client accepted the terms
+  terms_version     String   @default("")   // Phase 1.13: which version (TERMS_VERSION)
   lead_id       String?                      // Link back to originating lead
   created_at    DateTime @default(now())
   updated_at    DateTime @updatedAt

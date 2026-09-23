@@ -13,8 +13,14 @@ describe('Validation Schemas', () => {
         email: 'test@example.com',
         password: 'password123',
         name: 'Test User',
+        accept_terms: true, // Phase 1.13
       });
       expect(result.success).toBe(true);
+    });
+
+    it('rejects registration without explicit terms acceptance (Phase 1.13)', () => {
+      expect(RegisterSchema.safeParse({ email: 'test@example.com', password: 'password123', name: 'Test User' }).success).toBe(false);
+      expect(RegisterSchema.safeParse({ email: 'test@example.com', password: 'password123', name: 'Test User', accept_terms: false }).success).toBe(false);
     });
 
     it('rejects invalid email', () => {

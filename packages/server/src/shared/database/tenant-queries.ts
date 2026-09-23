@@ -38,6 +38,8 @@ export class TenantQuery {
     kyc_status?: string;
     lead_id?: string | null;
     email_verified_at?: Date | null;
+    terms_accepted_at?: Date | null;
+    terms_version?: string;
   }) {
     return this.db.user.create({
       data: { ...data, tenant_id: this.tenantId },

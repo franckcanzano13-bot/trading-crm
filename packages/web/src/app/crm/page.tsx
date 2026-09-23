@@ -142,6 +142,9 @@ function LoginPanel({ onLogin }: { onLogin: (token: string, tenantId: string, ad
                 className="w-full py-3 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-semibold hover:from-indigo-600 hover:to-purple-700 disabled:opacity-50 transition-all shadow-lg shadow-indigo-500/25 text-sm">
                 {loading ? 'Signing in...' : 'Sign In to CRM'}
               </button>
+              <div className="text-center">
+                <a href={`/forgot-password?type=admin${tenantId ? `&tenant=${tenantId}` : ''}`} className="text-xs text-muted-foreground hover:text-primary transition-colors">Forgot your password?</a>
+              </div>
             </div>
           </div>
         </div>

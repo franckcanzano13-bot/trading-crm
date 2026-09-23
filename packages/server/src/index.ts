@@ -245,7 +245,12 @@ async function buildServer() {
   //      verifies tenant.execution_mode === 'B_BOOK_DEALER').
   if (process.env.ENABLE_DEALER_MODULE === '1') {
     try {
-      const { dealerRoutes } = await import('./modules/dealer/routes');
+      // The path is assembled at runtime ON PURPOSE: with a string literal,
+      // tsc resolves the module statically and the regulated Docker build
+      // (dealer/ removed before compilation) fails with TS2307. The first
+      // CI run of that profile caught it.
+      const dealerModulePath = './modules/dealer/' + 'routes';
+      const { dealerRoutes } = (await import(dealerModulePath)) as { dealerRoutes: (app: FastifyInstance) => Promise<void> };
       await fastify.register(dealerRoutes);
       logger.info('[index] dealer module loaded (ENABLE_DEALER_MODULE=1)');
     } catch (err) {

@@ -1,0 +1,65 @@
+{
+  "title": "TradeXLabel — Overview",
+  "uid": "txl-overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "type": "stat", "title": "API replicas up", "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "targets": [{ "expr": "sum(up{job=\"tradexlabel-api\"})", "refId": "A" }],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] } } }
+    },
+    {
+      "type": "stat", "title": "Segregation drift (cents, max over tenants)", "gridPos": { "x": 4, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "max(abs(tradexlabel_segregation_drift_cents))", "refId": "A" }],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } } }
+    },
+    {
+      "type": "stat", "title": "Position monitor age (s)", "gridPos": { "x": 10, "y": 0, "w": 4, "h": 4 },
+      "targets": [{ "expr": "max(tradexlabel_position_monitor_last_run_age_seconds >= 0)", "refId": "A" }],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 10 }, { "color": "red", "value": 30 }] } } }
+    },
+    {
+      "type": "stat", "title": "5xx rate (5m)", "gridPos": { "x": 14, "y": 0, "w": 5, "h": 4 },
+      "targets": [{ "expr": "sum(rate(tradexlabel_http_requests_total{status_code=~\"5..\"}[5m])) / sum(rate(tradexlabel_http_requests_total[5m]))", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.02 }] } } }
+    },
+    {
+      "type": "stat", "title": "Open positions", "gridPos": { "x": 19, "y": 0, "w": 5, "h": 4 },
+      "targets": [{ "expr": "sum(tradexlabel_open_positions)", "refId": "A" }]
+    },
+    {
+      "type": "timeseries", "title": "Requests / s by status", "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "targets": [{ "expr": "sum by (status_code) (rate(tradexlabel_http_requests_total[1m]))", "legendFormat": "{{status_code}}", "refId": "A" }]
+    },
+    {
+      "type": "timeseries", "title": "p95 latency by route", "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "targets": [{ "expr": "histogram_quantile(0.95, sum by (le, route) (rate(tradexlabel_http_request_duration_seconds_bucket[5m])))", "legendFormat": "{{route}}", "refId": "A" }],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "type": "timeseries", "title": "Client trust per tenant (cents)", "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "targets": [{ "expr": "tradexlabel_client_trust_cents", "legendFormat": "{{tenant}}", "refId": "A" }]
+    },
+    {
+      "type": "timeseries", "title": "Price sources (1 = live) and tick age", "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "tradexlabel_price_source_up", "legendFormat": "up {{source}}", "refId": "A" },
+        { "expr": "tradexlabel_price_source_tick_age_seconds", "legendFormat": "age {{source}}", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries", "title": "Trades opened / closed per minute", "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+      "targets": [
+        { "expr": "sum(rate(tradexlabel_trades_opened_total[1m])) * 60", "legendFormat": "opened", "refId": "A" },
+        { "expr": "sum(rate(tradexlabel_trades_closed_total[1m])) * 60", "legendFormat": "closed", "refId": "B" }
+      ]
+    },
+    {
+      "type": "timeseries", "title": "Login attempts by outcome", "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+      "targets": [{ "expr": "sum by (outcome) (rate(tradexlabel_login_attempts_total[5m])) * 300", "legendFormat": "{{outcome}}", "refId": "A" }]
+    }
+  ]
+}

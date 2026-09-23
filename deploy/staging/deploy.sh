@@ -12,6 +12,8 @@ set -a; . ./.env; set +a
 export IMAGE_TAG="${IMAGE_TAG:-main}"
 
 echo "[deploy] tag=${IMAGE_TAG} domain=${STAGING_DOMAIN}"
+# Phase 1.7: Prometheus reads the bearer token from a file (never from the compose file).
+mkdir -p monitoring && printf "%s" "$METRICS_AUTH_TOKEN" > monitoring/metrics_token && chmod 600 monitoring/metrics_token
 docker compose pull --quiet
 # `up` re-runs the one-shot migrate service (prisma migrate deploy) before api
 # starts, thanks to service_completed_successfully.

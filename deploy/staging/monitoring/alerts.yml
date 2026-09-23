@@ -1,0 +1,65 @@
+# Phase 1.7 — Alert rules. Each alert names the runbook to open.
+groups:
+  - name: tradexlabel-availability
+    rules:
+      - alert: ApiDown
+        expr: up{job="tradexlabel-api"} == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "API replica {{ $labels.instance }} is not answering /metrics"
+          runbook: docs/runbooks/README.md
+
+      - alert: ApiHighErrorRate
+        expr: |
+          sum(rate(tradexlabel_http_requests_total{status_code=~"5.."}[5m]))
+            / sum(rate(tradexlabel_http_requests_total[5m])) > 0.02
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "More than 2% of requests return 5xx over 5 minutes"
+
+      - alert: ApiSlowOrders
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(tradexlabel_http_request_duration_seconds_bucket{route=~"/api/v1/orders.*"}[5m]))) > 1
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "p95 latency on order endpoints above 1s"
+
+      - alert: PositionMonitorStale
+        # -1 = this process does not run the monitor (RUN_AS_API_ONLY); only the worker exposes a real age.
+        expr: max(tradexlabel_position_monitor_last_run_age_seconds >= 0) > 30
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Position monitor has not completed a loop for {{ $value }}s — SL/TP and liquidations are not running"
+          runbook: docs/runbooks/README.md
+
+  - name: tradexlabel-money
+    rules:
+      - alert: SegregationDrift
+        expr: tradexlabel_segregation_drift_cents != 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Client funds ledger drift on tenant {{ $labels.tenant }}: {{ $value }} cents"
+          runbook: docs/runbooks/incident-segregation-drift.md
+
+  - name: tradexlabel-pricing
+    rules:
+      - alert: PriceSourceDown
+        expr: tradexlabel_price_source_up == 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Price source {{ $labels.source }} is not live (fallback data may be served)"
+          runbook: docs/runbooks/price-feed-outage.md
+
+      - alert: PriceSourceSilent
+        expr: tradexlabel_price_source_tick_age_seconds > 120 and tradexlabel_price_source_up == 1
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Price source {{ $labels.source }} reports live but sent no tick for {{ $value }}s"
+          runbook: docs/runbooks/price-feed-outage.md

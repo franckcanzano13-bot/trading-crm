@@ -1,0 +1,18 @@
+# Phase 1.7 — Alertmanager. Replace the webhook with your on-call channel
+# (Slack incoming webhook, PagerDuty events URL, or an SMTP block).
+route:
+  receiver: ops-webhook
+  group_by: [alertname, tenant]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: [severity="critical"]
+      receiver: ops-webhook
+      repeat_interval: 1h
+
+receivers:
+  - name: ops-webhook
+    webhook_configs:
+      - url: ${ALERT_WEBHOOK_URL}
+        send_resolved: true

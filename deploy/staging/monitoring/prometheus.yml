@@ -1,0 +1,32 @@
+# Phase 1.7 — Prometheus for the staging stack. Scrapes every api replica
+# through the compose DNS (tasks.api resolves to all replicas) with the
+# bearer token from METRICS_AUTH_TOKEN (Sprint 4.5).
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: tradexlabel-api
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/metrics_token
+    dns_sd_configs:
+      - names: ["tasks.api", "api"]
+        type: A
+        port: 5500
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

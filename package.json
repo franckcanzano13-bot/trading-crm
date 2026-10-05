@@ -20,7 +20,7 @@
     "smoke": "node scripts/smoke-api.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "^1.58.2",
+    "@playwright/test": "^1.63.0",
     "concurrently": "^8.2.2",
     "playwright": "^1.58.2",
     "typescript": "^5.4.0"

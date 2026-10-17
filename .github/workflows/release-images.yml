@@ -60,7 +60,7 @@ jobs:
           fi
 
       - name: Build and push api (full)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: packages/server/Dockerfile
@@ -73,7 +73,7 @@ jobs:
           cache-to: type=gha,scope=api,mode=max
 
       - name: Build and push api (regulated)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: packages/server/Dockerfile
@@ -86,7 +86,7 @@ jobs:
           cache-to: type=gha,scope=api-regulated,mode=max
 
       - name: Build and push web (staging origin)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: packages/web/Dockerfile
